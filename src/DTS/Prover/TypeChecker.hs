@@ -20,7 +20,8 @@ module DTS.Prover.TypeChecker
   changeSig,
   execute,
   repositP,
-  searchIndex
+  searchIndex,
+  getJudgements
 ) where
 
 import qualified DTS.UDTT as UD           -- UDTT
@@ -34,6 +35,7 @@ import Interface.Text
 --import Interface.TeX
 --import Interface.HTML
 import DTS.Prover.Judgement
+import Debug.Trace
 
 -- transP : UDTTの項をDTTの項に変換する関数
 -- (Asp)は変換先がないので、[]が返る(?)
@@ -352,6 +354,7 @@ typeInferU typeEnv sig (UD.Sigma preA preB) = do
                  ++ (typeCheckU (preA':typeEnv) sig preB UD.Kind)
   ansType <- getTypeU rightTree
   return (USigF (UJudgement typeEnv (UD.Sigma preA preB) ansType) leftTree rightTree)
+-- TODO
 -- (ΣE) rule
 typeInferU typeEnv sig (UD.Proj selector preM) =
   if selector == UD.Fst
@@ -544,3 +547,50 @@ searchIndex preA (_:xs) env result =
 -- | Pi型の項の、関数適用した結果の項と型を返す
 make :: UD.Preterm -> UD.Preterm -> UD.Preterm -> (UD.Preterm, UD.Preterm)
 make v preB p = (UD.App v p, UD.shiftIndices (UD.subst preB (UD.shiftIndices p 1 0) 0) (-1) 0)
+
+-- TODO
+-- termとtypeを受け取ってJudgementのlistを得る
+getJudgements :: TUEnv -> [(UD.Preterm, UD.Preterm)] -> [[UJudgement]]
+getJudgements env [] = []
+getJudgements env ((tm, ty):rest) =
+  let newPairs = loop env (tm, ty)
+      newJudgements = map (\(tm2, ty2) -> UJudgement env tm2 ty2) newPairs
+      filteredJudgements = filter isEntityPred newJudgements
+  -- in  trace ("newJudgements: " ++ show (length newJudgements) ++ 
+  --             ", filteredJudgements: " ++ show (length filteredJudgements))
+  in  (filteredJudgements : getJudgements env rest)
+  where
+      -- isEntityPred (UJudgement _ _ (UD.App _ _)) = True
+      isEntityPred (UJudgement _ _ (UD.Con cname)) = cname == "entity"
+      isEntityPred _ = False
+
+loop :: TUEnv -> (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
+loop env (tm, ty) = case ty of
+    UD.Sigma _ _ ->
+      let sigmaResult = sigmaE2 (tm, ty)
+      in concatMap (loop env) sigmaResult
+    _ -> [(tm, ty)]
+
+sigmaE2 :: (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
+sigmaE2 (m, (UD.Sigma a b)) = [((UD.Proj UD.Fst m), a), ((UD.Proj UD.Snd m), (UD.subst b a 0))]
+
+loopSigma :: UD.Preterm -> Maybe [UD.Preterm]
+loopSigma term = do
+  case term of
+    UD.Sigma _ _ -> case sigmaE term of
+      newTerms -> do
+        result <- mapM loopSigma newTerms
+        Just (term : concat result)
+    _ -> Just [term]
+
+sigmaE :: UD.Preterm -> [UD.Preterm]
+sigmaE (UD.Sigma a b) = [a, (UD.subst b a 0)]
+-- sigmaE (UD.Sigma a b) = tracse ("a : " ++ (show a) ++ "    b : " ++ (show b)) $ [a, (UD.subst b a 0)]
+
+-- | Substitution of the variable i in a preterm M with a preterm L
+--   "subst M L i" = M[L/i]
+-- subst :: Preterm -> Preterm -> Int -> Preterm
+
+-- | shiftIndices m d i
+-- add d to all the indices that is greater than or equal to i within m (=d-place shift)
+-- shiftIndices :: Preterm -> Int -> Int -> Preterm

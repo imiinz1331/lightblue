@@ -15,17 +15,22 @@ module DTS.Prover (
   defaultTypeCheck,
   defaultProofSearch,
   checkFelicity,
-  checkEntailment
+  checkEntailment,
+  strToEntityPred
   ) where
 
 import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import qualified Parser.ChartParser as CP
+import qualified Parser.Language.Japanese.Templates as TP
 import qualified Interface.HTML as HTML
 import qualified DTS.UDTT as UD
 import qualified DTS.Prover.TypeChecker as Ty
 import qualified DTS.Prover.Judgement as Ty
+
+import qualified System.IO as S
+import Debug.Trace
 
 -- | type check with the default signature = entity:type, evt:type
 defaultTypeCheck :: UD.Signature -> UD.Context -> UD.Preterm -> UD.Preterm -> [Ty.UTree  Ty.UJudgement]
@@ -50,6 +55,30 @@ sequentialTypeCheck sig = foldr (\sr cont -> let result = do
                                                 then (UD.Con "Typecheck or aspElim failed"):cont
                                                 else (head result):cont
                                 ) []
+
+strToEntityPred :: Int -> Int -> [T.Text] -> IO ()
+strToEntityPred beam nbest str = do
+  -- S1, S2, ... と文に番号を振る
+  let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str
+  nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ CP.simpleParse beam s) numberedStr
+  
+  let pairslist = map (map (\(num, node) -> (num, node, UD.betaReduce $ UD.sigmaElimination $ CP.sem node)) . take nbest) nodeslist;
+      chosenlist = choice pairslist
+      nodeSRlist = map unzip3 chosenlist
+      nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
+      srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, UD.Preterm)]
+      sig = foldl L.union [] $ map CP.sig nds
+  
+  let entities = Ty.getJudgements [] [(x, y) | (_, x) <- srs, (_, y) <- srs]
+  mapM_ (\(num, entities) -> do
+    putStrLn $ T.unpack num ++ ":"
+    mapM_ (\j -> putStrLn $ "  " ++ show j) entities
+    putStrLn ""
+    ) $ zip (map fst srs) judges
+  
+  -- entitiesをインデックス化
+  let indexEntities = map (zip [0..]) entities
+
 
 -- | checks if premises entails hypothesis
 checkEntailment :: Int         -- ^ beam width
