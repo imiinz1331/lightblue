@@ -36,6 +36,7 @@ import Interface.Text
 --import Interface.HTML
 import DTS.Prover.Judgement
 import Debug.Trace
+import Data.Typeable
 
 -- transP : UDTTの項をDTTの項に変換する関数
 -- (Asp)は変換先がないので、[]が返る(?)
@@ -549,20 +550,32 @@ make :: UD.Preterm -> UD.Preterm -> UD.Preterm -> (UD.Preterm, UD.Preterm)
 make v preB p = (UD.App v p, UD.shiftIndices (UD.subst preB (UD.shiftIndices p 1 0) 0) (-1) 0)
 
 -- TODO
--- termとtypeを受け取ってJudgementのlistを得る
-getJudgements :: TUEnv -> [(UD.Preterm, UD.Preterm)] -> [[UJudgement]]
+-- termとtypeを受け取って([entity], [述語])のlistを得る
+getJudgements :: TUEnv -> [(UD.Preterm, UD.Preterm)] -> [([UJudgement], [UJudgement])]
 getJudgements env [] = []
 getJudgements env ((tm, ty):rest) =
   let newPairs = loop env (tm, ty)
       newJudgements = map (\(tm2, ty2) -> UJudgement env tm2 ty2) newPairs
-      filteredJudgements = filter isEntityPred newJudgements
-  -- in  trace ("newJudgements: " ++ show (length newJudgements) ++ 
-  --             ", filteredJudgements: " ++ show (length filteredJudgements))
-  in  (filteredJudgements : getJudgements env rest)
+      (entities, others) = L.partition isEntity newJudgements
+      (preds, _) = L.partition isPred others
+  in  ((entities, preds) : getJudgements env rest)
   where
-      -- isEntityPred (UJudgement _ _ (UD.App _ _)) = True
-      isEntityPred (UJudgement _ _ (UD.Con cname)) = cname == "entity"
-      isEntityPred _ = False
+      isEntity (UJudgement _ _ (UD.Con cname)) = cname == "entity"
+      isEntity _ = False
+      isPred (UJudgement _ _ term) = 
+          case term of
+            UD.App (UD.App f x) y ->
+                not (containsFunctionType f) && 
+                not (containsFunctionType x) && 
+                not (containsFunctionType y)
+            _ -> False
+
+containsFunctionType :: UD.Preterm -> Bool
+containsFunctionType term = case term of
+    UD.Pi _ _ -> True
+    UD.Lam _ -> True
+    UD.App f x -> containsFunctionType f || containsFunctionType x
+    _ -> False
 
 loop :: TUEnv -> (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
 loop env (tm, ty) = case ty of
@@ -585,12 +598,3 @@ loopSigma term = do
 
 sigmaE :: UD.Preterm -> [UD.Preterm]
 sigmaE (UD.Sigma a b) = [a, (UD.subst b a 0)]
--- sigmaE (UD.Sigma a b) = tracse ("a : " ++ (show a) ++ "    b : " ++ (show b)) $ [a, (UD.subst b a 0)]
-
--- | Substitution of the variable i in a preterm M with a preterm L
---   "subst M L i" = M[L/i]
--- subst :: Preterm -> Preterm -> Int -> Preterm
-
--- | shiftIndices m d i
--- add d to all the indices that is greater than or equal to i within m (=d-place shift)
--- shiftIndices :: Preterm -> Int -> Int -> Preterm

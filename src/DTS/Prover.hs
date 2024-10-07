@@ -22,6 +22,7 @@ module DTS.Prover (
 import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
+import qualified Data.Map as Map
 import qualified Parser.ChartParser as CP
 import qualified Parser.Language.Japanese.Templates as TP
 import qualified Interface.HTML as HTML
@@ -69,15 +70,50 @@ strToEntityPred beam nbest str = do
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, UD.Preterm)]
       sig = foldl L.union [] $ map CP.sig nds
   
-  let entities = Ty.getJudgements [] [(x, y) | (_, x) <- srs, (_, y) <- srs]
+  let judges = Ty.getJudgements [] [(x, y) | (_, x) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
+      entities = map fst judges
+      preds = map snd judges
+
+  -- putStrLn $ "judges : " ++ show (map (\(cons, apps) -> (length cons, length apps)) judges)
+
   mapM_ (\(num, entities) -> do
-    putStrLn $ T.unpack num ++ ":"
+    putStrLn $ T.unpack num ++ " entity:"
     mapM_ (\j -> putStrLn $ "  " ++ show j) entities
     putStrLn ""
-    ) $ zip (map fst srs) judges
+    ) $ zip (map fst srs) entities
+  mapM_ (\(num, preds) -> do
+    putStrLn $ T.unpack num ++ " pred:"
+    mapM_ (\j -> putStrLn $ "  " ++ show j) preds
+    putStrLn ""
+    ) $ zip (map fst srs) preds
   
   -- entitiesをインデックス化
-  let indexEntities = map (zip [0..]) entities
+  let entitiesIdx = indexJudgements entities :: [(Int, Ty.UJudgement)]
+  -- entityの総数
+  let entitiesNum = length entitiesIdx
+  -- putStrLn $ (show entityIndex) ++ " " ++ (show entityNum)
+  -- id->entityのマップ
+  let entityMap = Map.fromList entitiesIdx
+  -- putStrLn $ "Entity Map: " ++ show entityMap
+
+  -- predsをインデックス化
+  let indexPreds = indexJudgements preds :: [(Int, Ty.UJudgement)]
+  -- predsの総数
+  let predsNum = length indexPreds
+  -- putStrLn $ (show predsIndex) ++ " " ++ (show predsNum)
+  -- id->述語のマップ
+  let predsIdxMap = Map.fromList indexPreds
+  -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
+  putStrLn $ show entitiesNum ++ "," ++ show predsNum
+
+indexJudgements :: [[Ty.UJudgement]] -> [(Int, Ty.UJudgement)]
+indexJudgements = snd . L.foldl' addIndexedGroup (0, [])
+  where
+    addIndexedGroup :: (Int, [(Int, Ty.UJudgement)]) -> [Ty.UJudgement] -> (Int, [(Int, Ty.UJudgement)])
+    addIndexedGroup (startIndex, acc) group = 
+      let indexed = zip [startIndex..] group
+          newIndex = startIndex + length group
+      in (newIndex, acc ++ indexed)
 
 
 -- | checks if premises entails hypothesis
