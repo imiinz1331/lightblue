@@ -41,7 +41,7 @@ data Command =
   | Demo
   | Treebank
   | JSeMParser
-  | Mizuki
+  | NeuralDTS
     deriving (Show, Eq)
 
 --commandReader :: String -> a -> String -> [(a,String)]
@@ -112,8 +112,8 @@ optionParser =
       <> command "jsemparser"
            (info (pure JSeMParser)
                  (progDesc "parse a jsem file. No local options" ))
-      <> command "mizuki"
-           (info (pure Mizuki)
+      <> command "neuraldts"
+           (info (pure NeuralDTS)
                  (progDesc "Local options: [-p|--prover dts|coq] (The default values: -p dts)" ))
       <> metavar "COMMAND (=parse|infer|debug|demo)"
       <> commandGroup "Available COMMANDs and thier local options"
@@ -298,10 +298,10 @@ lightblueMain (Options commands input filepath nbest beamw iftime) = do
         mapM_ StrictT.putStr $ J.premises jsem
         S.putChar '\t' 
         StrictT.putStrLn $ J.hypothesis jsem
-    --
-    -- | Mizuki
     -- 
-    lightblueMainLocal Mizuki contents = do
+    -- | Neural DTS
+    -- 
+    lightblueMainLocal NeuralDTS contents = do
       -- let handle = S.stdout;
       Prover.strToEntityPred beamw nbest (T.lines contents)
 
