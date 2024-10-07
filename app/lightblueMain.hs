@@ -41,6 +41,7 @@ data Command =
   | Demo
   | Treebank
   | JSeMParser
+  | Mizuki
     deriving (Show, Eq)
 
 --commandReader :: String -> a -> String -> [(a,String)]
@@ -111,6 +112,9 @@ optionParser =
       <> command "jsemparser"
            (info (pure JSeMParser)
                  (progDesc "parse a jsem file. No local options" ))
+      <> command "mizuki"
+           (info (pure Mizuki)
+                 (progDesc "Local options: [-p|--prover dts|coq] (The default values: -p dts)" ))
       <> metavar "COMMAND (=parse|infer|debug|demo)"
       <> commandGroup "Available COMMANDs and thier local options"
       <> help "specifies the task to execute.  See 'Available COMMANDs ...' below about local options for each command"
@@ -294,6 +298,12 @@ lightblueMain (Options commands input filepath nbest beamw iftime) = do
         mapM_ StrictT.putStr $ J.premises jsem
         S.putChar '\t' 
         StrictT.putStrLn $ J.hypothesis jsem
+    --
+    -- | Mizuki
+    -- 
+    lightblueMainLocal Mizuki contents = do
+      -- let handle = S.stdout;
+      Prover.strToEntityPred beamw nbest (T.lines contents)
 
 -- | lightblue --version
 -- |
