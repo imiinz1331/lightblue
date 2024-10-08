@@ -1,4 +1,4 @@
-{-#OPTIONS -Wall#-}
+{-# OPTIONS -Wall#-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-|
@@ -561,6 +561,7 @@ getJudgements env ((tm, ty):rest) =
   in  ((entities, preds) : getJudgements env rest)
   where
       isEntity (UJudgement _ _ (UD.Con cname)) = cname == "entity"
+      -- isEntity (UJudgement _ _ (UD.Con _)) = True
       isEntity _ = False
       isPred (UJudgement _ _ term) = 
           case term of
@@ -580,21 +581,49 @@ containsFunctionType term = case term of
 loop :: TUEnv -> (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
 loop env (tm, ty) = case ty of
     UD.Sigma _ _ ->
-      let sigmaResult = sigmaE2 (tm, ty)
+      let sigmaResult = sigmaE (tm, ty)
       in concatMap (loop env) sigmaResult
     _ -> [(tm, ty)]
 
-sigmaE2 :: (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
-sigmaE2 (m, (UD.Sigma a b)) = [((UD.Proj UD.Fst m), a), ((UD.Proj UD.Snd m), (UD.subst b a 0))]
+sigmaE :: (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
+sigmaE (m, (UD.Sigma a b)) = [((UD.Proj UD.Fst m), a), ((UD.Proj UD.Snd m), (UD.subst b (UD.Proj UD.Fst m) 0))]
 
-loopSigma :: UD.Preterm -> Maybe [UD.Preterm]
-loopSigma term = do
-  case term of
-    UD.Sigma _ _ -> case sigmaE term of
-      newTerms -> do
-        result <- mapM loopSigma newTerms
-        Just (term : concat result)
-    _ -> Just [term]
+-- テスト関数
+testEliminateSigma :: Bool
+testEliminateSigma = and
+  [ testNonDependentSigma,
+    testDependentSigma
+  ]
 
-sigmaE :: UD.Preterm -> [UD.Preterm]
-sigmaE (UD.Sigma a b) = [a, (UD.subst b a 0)]
+testNonDependentSigma :: Bool
+testNonDependentSigma =
+    let env = []
+        term = UD.Var 0
+        sigmaType = UD.Sigma (UD.Con (T.pack "A")) (UD.Con (T.pack "B"))
+        result = loop env (term, sigmaType)
+        expected = [ (UD.Proj UD.Fst (UD.Var 0), UD.Con (T.pack "A"))
+                   , (UD.Proj UD.Snd (UD.Var 0), UD.Con (T.pack "B"))
+                   ]
+    in trace ("Non Dependen Sigma test: " ++ show (result == expected)) (result == expected)
+
+testDependentSigma :: Bool
+testDependentSigma =
+    let env = []
+        term = UD.Var 0
+        -- (x : Nat) × Vec A x
+        sigmaType = UD.Sigma 
+                        UD.Nat 
+                        (UD.App (UD.Con (T.pack "Vec")) (UD.Con (T.pack "A")) `UD.App` UD.Var 0)
+        result = loop env (term, sigmaType)
+        expected = [ (UD.Proj UD.Fst (UD.Var 0), UD.Nat)
+                   , (UD.Proj UD.Snd (UD.Var 0), 
+                      UD.App (UD.Con (T.pack "Vec")) (UD.Con (T.pack "A")) `UD.App` (UD.Proj UD.Fst (UD.Var 0)))
+                   ]
+    in trace ("Dependent Sigma test: " ++ show (result == expected)) (result == expected)
+
+runTests :: IO ()
+runTests = do
+  let allTestsPassed = testEliminateSigma
+  putStrLn $ if allTestsPassed
+    then "All tests passed!"
+    else "Some tests failed."
