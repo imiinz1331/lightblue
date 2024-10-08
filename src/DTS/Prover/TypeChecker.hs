@@ -592,7 +592,8 @@ sigmaE (m, (UD.Sigma a b)) = [((UD.Proj UD.Fst m), a), ((UD.Proj UD.Snd m), (UD.
 testEliminateSigma :: Bool
 testEliminateSigma = and
   [ testNonDependentSigma,
-    testDependentSigma
+    testDependentSigma,
+    testWalkingManSigma
   ]
 
 testNonDependentSigma :: Bool
@@ -609,19 +610,42 @@ testNonDependentSigma =
 testDependentSigma :: Bool
 testDependentSigma =
     let env = []
+        -- Var 0 : (x : Nat) × Vec A x
         term = UD.Var 0
-        -- (x : Nat) × Vec A x
         sigmaType = UD.Sigma 
                         UD.Nat 
                         (UD.App (UD.Con (T.pack "Vec")) (UD.Con (T.pack "A")) `UD.App` UD.Var 0)
         result = loop env (term, sigmaType)
-        expected = [ (UD.Proj UD.Fst (UD.Var 0), UD.Nat)
-                   , (UD.Proj UD.Snd (UD.Var 0), 
+        expected = [ (UD.Proj UD.Fst (UD.Var 0), UD.Nat) -- π1(Var 0) : Nat
+                   , (UD.Proj UD.Snd (UD.Var 0),  -- π2(Var 0) : Vec A (π1(Var 0))
                       UD.App (UD.Con (T.pack "Vec")) (UD.Con (T.pack "A")) `UD.App` (UD.Proj UD.Fst (UD.Var 0)))
                    ]
     in trace ("Dependent Sigma test: " ++ show (result == expected)) (result == expected)
 
-runTests :: IO ()
+testWalkingManSigma :: Bool
+testWalkingManSigma =
+    let env = []  -- 環境を空のままにします
+        term = UD.Con (T.pack "S") 
+        -- S : (u : (x : entity × man(x))) × walk(π1(u))
+        -- term = UD.Var 0
+        sigmaType = UD.Sigma 
+                        (UD.Sigma 
+                            (UD.Con (T.pack "entity")) 
+                            (UD.App (UD.Con (T.pack "man")) (UD.Var 0)))
+                        (UD.App (UD.Con (T.pack "walk")) (UD.Proj UD.Fst (UD.Var 0)))
+        result = loop env (term, sigmaType)
+        expected = [ 
+            (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S"))), UD.Con (T.pack "entity")),
+            (UD.Proj UD.Snd (UD.Proj UD.Fst (UD.Con (T.pack "S"))), 
+             UD.App (UD.Con (T.pack "man")) (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S"))))),
+            (UD.Proj UD.Snd (UD.Con (T.pack "S")), 
+             UD.App (UD.Con (T.pack "walk")) (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S")))))
+          ]
+        traceResult = trace ("Result: " ++ show result) result
+        traceExpected = trace ("Expected: " ++ show expected) expected
+        isEqual = traceResult == traceExpected
+    in trace ("WalkingMan Sigma test: " ++ show isEqual) isEqual
+    
 runTests = do
   let allTestsPassed = testEliminateSigma
   putStrLn $ if allTestsPassed
