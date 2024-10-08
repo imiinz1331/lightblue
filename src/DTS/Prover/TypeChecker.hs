@@ -624,7 +624,7 @@ testDependentSigma =
 
 testWalkingManSigma :: Bool
 testWalkingManSigma =
-    let env = []  -- 環境を空のままにします
+    let env = []
         term = UD.Con (T.pack "S") 
         -- S : (u : (x : entity × man(x))) × walk(π1(u))
         -- term = UD.Var 0
