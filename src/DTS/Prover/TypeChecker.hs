@@ -625,9 +625,8 @@ testDependentSigma =
 testWalkingManSigma :: Bool
 testWalkingManSigma =
     let env = []
-        term = UD.Con (T.pack "S") 
         -- S : (u : (x : entity × man(x))) × walk(π1(u))
-        -- term = UD.Var 0
+        term = UD.Con (T.pack "S") 
         sigmaType = UD.Sigma 
                         (UD.Sigma 
                             (UD.Con (T.pack "entity")) 
@@ -635,10 +634,10 @@ testWalkingManSigma =
                         (UD.App (UD.Con (T.pack "walk")) (UD.Proj UD.Fst (UD.Var 0)))
         result = loop env (term, sigmaType)
         expected = [ 
-            (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S"))), UD.Con (T.pack "entity")),
-            (UD.Proj UD.Snd (UD.Proj UD.Fst (UD.Con (T.pack "S"))), 
+            (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S"))), UD.Con (T.pack "entity")), -- π1π1S : entity
+            (UD.Proj UD.Snd (UD.Proj UD.Fst (UD.Con (T.pack "S"))),  -- π2π1S : man(π1π1S)
              UD.App (UD.Con (T.pack "man")) (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S"))))),
-            (UD.Proj UD.Snd (UD.Con (T.pack "S")), 
+            (UD.Proj UD.Snd (UD.Con (T.pack "S")), -- π2S : walk(π1π1S)
              UD.App (UD.Con (T.pack "walk")) (UD.Proj UD.Fst (UD.Proj UD.Fst (UD.Con (T.pack "S")))))
           ]
         traceResult = trace ("Result: " ++ show result) result

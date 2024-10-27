@@ -23,9 +23,11 @@ import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import qualified Data.Map as Map
+import qualified Data.Maybe (mapMaybe)
 import qualified Parser.ChartParser as CP
 import qualified Parser.Language.Japanese.Templates as TP
 import qualified Interface.HTML as HTML
+import qualified Interface.Text as T
 import qualified DTS.UDTT as UD
 import qualified DTS.Prover.TypeChecker as Ty
 import qualified DTS.Prover.Judgement as Ty
@@ -69,52 +71,86 @@ strToEntityPred beam nbest str = do
       nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, UD.Preterm)]
       sig = foldl L.union [] $ map CP.sig nds
+
+  putStrLn $ "sig : " -- :: [(T.Text,Preterm)]
+  printList sig
   
   let judges = Ty.getJudgements [] [(x, y) | (_, x) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
-      entities = map fst judges
-      preds = map snd judges
+      entitiesJudges = map fst judges -- :: [[UJudgement]]   
+      predsJudges = map snd judges -- :: [[UJudgement]]
+      entities = map extractSecondPreterm entitiesJudges -- :: [[Preterm]]
+      preds = map extractSecondPreterm predsJudges -- :: [[Preterm]]
+
+  -- let entities2 = map extractEntities preds
+  --     entities = entities1 ++ entities2
 
   -- putStrLn $ "judges : " ++ show (map (\(cons, apps) -> (length cons, length apps)) judges)
 
   mapM_ (\(num, entities) -> do
     putStrLn $ T.unpack num ++ " entity:"
-    mapM_ (\j -> putStrLn $ "  " ++ show j) entities
+    mapM_ (\j -> putStrLn $ "  " ++ show j) entitiesJudges
     putStrLn ""
     ) $ zip (map fst srs) entities
   mapM_ (\(num, preds) -> do
     putStrLn $ T.unpack num ++ " pred:"
-    mapM_ (\j -> putStrLn $ "  " ++ show j) preds
+    mapM_ (\j -> putStrLn $ "  " ++ show j) predsJudges
     putStrLn ""
     ) $ zip (map fst srs) preds
   
   -- entitiesをインデックス化
-  let entitiesIdx = indexJudgements entities :: [(Int, Ty.UJudgement)]
+  let entitiesIndex = indexPreterms entities :: [(Int, UD.Preterm)]
   -- entityの総数
-  let entitiesNum = length entitiesIdx
-  -- putStrLn $ (show entityIndex) ++ " " ++ (show entityNum)
+  let entitiesNum = length entitiesIndex
+  putStrLn $ (show entitiesIndex) ++ " " ++ (show entitiesNum)
   -- id->entityのマップ
-  let entityMap = Map.fromList entitiesIdx
+  -- let entityMap = Map.fromList entitiesIdx
   -- putStrLn $ "Entity Map: " ++ show entityMap
 
   -- predsをインデックス化
-  let indexPreds = indexJudgements preds :: [(Int, Ty.UJudgement)]
+  let predsIndex = indexPreterms preds
   -- predsの総数
-  let predsNum = length indexPreds
-  -- putStrLn $ (show predsIndex) ++ " " ++ (show predsNum)
+  let predsNum = length predsIndex
+  putStrLn $ (show predsIndex) ++ " " ++ (show predsNum)
   -- id->述語のマップ
-  let predsIdxMap = Map.fromList indexPreds
+  -- let predsIdxMap = Map.fromList indexPreds
   -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
   putStrLn $ show entitiesNum ++ "," ++ show predsNum
 
-indexJudgements :: [[Ty.UJudgement]] -> [(Int, Ty.UJudgement)]
-indexJudgements = snd . L.foldl' addIndexedGroup (0, [])
+indexPreterms :: [[UD.Preterm]] -> [(Int, UD.Preterm)]
+indexPreterms = snd . L.foldl' addIndexedGroup (0, [])
   where
-    addIndexedGroup :: (Int, [(Int, Ty.UJudgement)]) -> [Ty.UJudgement] -> (Int, [(Int, Ty.UJudgement)])
+    addIndexedGroup :: (Int, [(Int, UD.Preterm)]) -> [UD.Preterm] -> (Int, [(Int, UD.Preterm)])
     addIndexedGroup (startIndex, acc) group = 
       let indexed = zip [startIndex..] group
           newIndex = startIndex + length group
       in (newIndex, acc ++ indexed)
 
+extractSecondPreterm :: [Ty.UJudgement] -> [UD.Preterm]
+extractSecondPreterm = map (\(Ty.UJudgement _ _ secondPreterm) -> secondPreterm)
+
+-- extractEntityWithType :: Ty.UJudgement -> Maybe Ty.UJudgement
+-- extractEntityWithType term =
+--   trace ("Checking term: " ++ show term) $
+--   case term of
+--     Ty.UJudgement _ _ (UD.App (UD.App f x) y) -> 
+--       trace ("Matched pattern. f: " ++ show f ++ ", x: " ++ show x ++ ", y: " ++ show y) $
+--       Just $ Ty.UJudgement [] x (UD.Con "entity")
+--     _ ->
+--       trace "Pattern not matched" 
+--       Nothing
+
+-- extractEntities :: [Ty.UJudgement] -> [Ty.UJudgement]
+-- extractEntities = Data.Maybe.mapMaybe extractEntityWithType
+
+printList :: [(T.Text, UD.Preterm)] -> IO ()
+printList [] = return ()
+printList ((text, preterm):xs) = do
+    T.putStr "Text: "
+    T.putStrLn text
+    putStr "Preterm: "
+    print preterm
+    printList xs
+    putStr ""
 
 -- | checks if premises entails hypothesis
 checkEntailment :: Int         -- ^ beam width
