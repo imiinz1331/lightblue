@@ -70,11 +70,14 @@ strToEntityPred beam nbest str = do
       nodeSRlist = map unzip3 chosenlist
       nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, UD.Preterm)]
-      sig = foldl L.union [] $ map CP.sig nds
+      sig = foldl L.union [] $ map CP.sig nds -- :: [(T.Text,Preterm)] (= UD.Signature)
 
-  putStrLn $ "sig : "
-  printList sig -- :: [(T.Text,Preterm)] (= UD.Signature)
+  putStrLn $ "srs : "
+  printList srs 
   
+  putStrLn $ "sig : "
+  printList sig
+
   let initialEnv = map snd sig
       judges = Ty.getJudgements initialEnv [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
       entitiesJudges = map fst judges -- :: [[UJudgement]]   

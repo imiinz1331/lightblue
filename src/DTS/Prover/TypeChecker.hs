@@ -560,8 +560,8 @@ getJudgements env ((tm, ty):rest) =
       (preds, _) = L.partition isPred others
   in  ((entities, preds) : getJudgements env rest)
   where
-      isEntity (UJudgement _ _ (UD.Con cname)) = cname == "entity"
-      -- isEntity (UJudgement _ _ (UD.Con _)) = True
+      -- isEntity (UJudgement _ _ (UD.Con cname)) = cname == "entity"
+      isEntity (UJudgement _ _ (UD.Con _)) = True
       isEntity _ = False
       isPred (UJudgement _ _ term) = 
           case term of
