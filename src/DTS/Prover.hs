@@ -102,7 +102,7 @@ strToEntityPred beam nbest str = do
   --   ) $ zip (map fst srs) preds
   
   -- entitiesの辞書
-  let entitiesIndex = indexPreterms allEntities :: [(Int, UD.Preterm)]
+  let entitiesIndex = pretermsIndex allEntities
   -- entityの総数
   let entitiesNum = length entitiesIndex
   putStrLn $ "~~entityの辞書~~ "
@@ -112,7 +112,7 @@ strToEntityPred beam nbest str = do
   -- putStrLn $ "Entity Map: " ++ show entityMap
 
   -- predsの辞書
-  let predsIndex = indexPreterms [sigPreds]
+  let predsIndex = pretermsIndex [sigPreds]
   -- predsの総数
   let predsNum = length predsIndex
   putStrLn $ "~~述語の辞書~~ "
@@ -124,7 +124,7 @@ strToEntityPred beam nbest str = do
 
   -- 成り立つpreds
   putStrLn $ "~~成り立つ述語~~ "
-  putStrLn $ show preds
+  putStrLn $ show $ concat preds
   -- id->述語のマップ
   -- let predsIdxMap = Map.fromList indexPreds
   -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
@@ -136,6 +136,15 @@ indexPreterms = snd . L.foldl' addIndexedGroup (0, [])
     addIndexedGroup :: (Int, [(Int, UD.Preterm)]) -> [UD.Preterm] -> (Int, [(Int, UD.Preterm)])
     addIndexedGroup (startIndex, acc) group = 
       let indexed = zip [startIndex..] group
+          newIndex = startIndex + length group
+      in (newIndex, acc ++ indexed)
+
+pretermsIndex :: [[UD.Preterm]] -> [(UD.Preterm, Int)]
+pretermsIndex = snd . L.foldl' addIndexedGroup (0, [])
+  where
+    addIndexedGroup :: (Int, [(UD.Preterm, Int)]) -> [UD.Preterm] -> (Int, [(UD.Preterm, Int)])
+    addIndexedGroup (startIndex, acc) group = 
+      let indexed = [(term, index) | (index, term) <- zip [startIndex..] group]
           newIndex = startIndex + length group
       in (newIndex, acc ++ indexed)
 
