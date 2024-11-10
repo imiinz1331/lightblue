@@ -59,6 +59,7 @@ sequentialTypeCheck sig = foldr (\sr cont -> let result = do
                                                 else (head result):cont
                                 ) []
 
+-- for Neural DTS
 strToEntityPred :: Int -> Int -> [T.Text] -> IO ()
 strToEntityPred beam nbest str = do
   -- S1, S2, ... と文に番号を振る
@@ -84,22 +85,11 @@ strToEntityPred beam nbest str = do
       entitiesJudges = map fst judges -- :: [[UJudgement]]   
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
-      preds = map extractTypePreterm predsJudges -- :: [[Preterm]]
+      correctPreds = map extractTypePreterm predsJudges -- :: [[Preterm]]
 
   let (tmp1, others) = L.partition isEntity [((UD.Con x), y) | (x, y) <- sig]
       allEntities = entities ++ [map fst tmp1]
       sigPreds = map fst others
-
-  -- mapM_ (\(num, entities) -> do
-  --   putStrLn $ T.unpack num ++ " entity:"
-  --   mapM_ (\j -> putStrLn $ "  " ++ show j) entitiesJudges
-  --   putStrLn ""
-  --   ) $ zip (map fst srs) entities
-  -- mapM_ (\(num, preds) -> do
-  --   putStrLn $ T.unpack num ++ " pred:"
-  --   mapM_ (\j -> putStrLn $ "  " ++ show j) predsJudges
-  --   putStrLn ""
-  --   ) $ zip (map fst srs) preds
   
   -- entitiesの辞書
   let entitiesIndex = pretermsIndex allEntities
@@ -122,9 +112,18 @@ strToEntityPred beam nbest str = do
   -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
   -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
 
-  -- 成り立つpreds
+   -- 成り立つpreds
   putStrLn $ "~~成り立つ述語~~ "
-  putStrLn $ show $ concat preds
+  putStrLn $ show $ concat correctPreds
+
+  -- TODO : n項述語ごとに分ける
+  let groupedPreds = groupPredicatesByArity correctPreds
+  mapM_ (\(arity, preds) -> do
+        putStrLn $ show arity ++ "項述語:"
+        mapM_ (putStrLn . show) preds
+        putStrLn ""
+    ) $ Map.toList groupedPreds
+
   -- id->述語のマップ
   -- let predsIdxMap = Map.fromList indexPreds
   -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
@@ -180,6 +179,23 @@ containsFunctionType term = case term of
     UD.Lam _ -> True
     UD.App f x -> containsFunctionType f || containsFunctionType x
     _ -> False
+
+groupPredicatesByArity :: [[UD.Preterm]] -> Map.Map Int [UD.Preterm]
+groupPredicatesByArity predicates = 
+    Map.fromListWith (++) $ concatMap groupSingle predicates
+  where
+    groupSingle preds = [(countArgs p, [p]) | p <- preds]
+
+countArgs :: UD.Preterm -> Int
+-- countArgs term = trace ("Counting args for: " ++ show term) $ countArgsFromString (show term)
+countArgs term = countArgsFromString (show term)
+
+countArgsFromString :: String -> Int
+countArgsFromString s = 
+    let withoutOuterParens = T.pack $ init $ tail $ dropWhile (/= '(') s
+        args = T.splitOn (T.pack ",") withoutOuterParens
+    -- in trace ("Split args: " ++ show args) $
+    in length args
 
 -- | checks if premises entails hypothesis
 checkEntailment :: Int         -- ^ beam width

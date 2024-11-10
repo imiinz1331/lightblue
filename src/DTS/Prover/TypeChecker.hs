@@ -549,7 +549,6 @@ searchIndex preA (_:xs) env result =
 make :: UD.Preterm -> UD.Preterm -> UD.Preterm -> (UD.Preterm, UD.Preterm)
 make v preB p = (UD.App v p, UD.shiftIndices (UD.subst preB (UD.shiftIndices p 1 0) 0) (-1) 0)
 
--- TODO
 -- termとtypeを受け取って([entity], [述語])のlistを得る
 getJudgements :: TUEnv -> [(UD.Preterm, UD.Preterm)] -> [([UJudgement], [UJudgement])]
 getJudgements env [] = []
@@ -650,7 +649,6 @@ runTests = do
   putStrLn $ if allTestsPassed
     then "All tests passed!"
     else "Some tests failed."
-    -}
 
 -- getJudgesのテスト関数
 testGetJudges :: Bool
@@ -722,3 +720,4 @@ runTests = do
   putStrLn $ if allTestsPassed
     then "All tests passed!"
     else "Some tests failed."
+-}
