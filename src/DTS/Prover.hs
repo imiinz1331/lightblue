@@ -72,56 +72,63 @@ strToEntityPred beam nbest str = do
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, UD.Preterm)]
       sig = foldl L.union [] $ map CP.sig nds -- :: [(T.Text,Preterm)] (= UD.Signature)
 
-  putStrLn $ "srs : "
+  putStrLn $ "~~srs~~"
   printList srs 
   
-  putStrLn $ "sig : "
+  putStrLn $ "~~sig~~"
   printList sig
 
-  let initialEnv = map snd sig
-      judges = Ty.getJudgements initialEnv [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
+  -- let initialEnv = map snd sig
+      -- judges = Ty.getJudgements initialEnv [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
+  let judges = Ty.getJudgements [] [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
       entitiesJudges = map fst judges -- :: [[UJudgement]]   
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
       preds = map extractTypePreterm predsJudges -- :: [[Preterm]]
 
-  let sigEntities = [map snd sig]
-      allEntities = entities ++ sigEntities
+  let (tmp1, others) = L.partition isEntity [((UD.Con x), y) | (x, y) <- sig]
+      allEntities = entities ++ [map fst tmp1]
+      sigPreds = map fst others
 
-  -- let entities2 = map extractEntities preds
-  --     entities = entities1 ++ entities2
-
-  -- putStrLn $ "judges : " ++ show (map (\(cons, apps) -> (length cons, length apps)) judges)
-
-  mapM_ (\(num, entities) -> do
-    putStrLn $ T.unpack num ++ " entity:"
-    mapM_ (\j -> putStrLn $ "  " ++ show j) entitiesJudges
-    putStrLn ""
-    ) $ zip (map fst srs) entities
-  mapM_ (\(num, preds) -> do
-    putStrLn $ T.unpack num ++ " pred:"
-    mapM_ (\j -> putStrLn $ "  " ++ show j) predsJudges
-    putStrLn ""
-    ) $ zip (map fst srs) preds
+  -- mapM_ (\(num, entities) -> do
+  --   putStrLn $ T.unpack num ++ " entity:"
+  --   mapM_ (\j -> putStrLn $ "  " ++ show j) entitiesJudges
+  --   putStrLn ""
+  --   ) $ zip (map fst srs) entities
+  -- mapM_ (\(num, preds) -> do
+  --   putStrLn $ T.unpack num ++ " pred:"
+  --   mapM_ (\j -> putStrLn $ "  " ++ show j) predsJudges
+  --   putStrLn ""
+  --   ) $ zip (map fst srs) preds
   
-  -- entitiesをインデックス化
+  -- entitiesの辞書
   let entitiesIndex = indexPreterms allEntities :: [(Int, UD.Preterm)]
   -- entityの総数
   let entitiesNum = length entitiesIndex
-  putStrLn $ (show entitiesIndex) ++ " " ++ (show entitiesNum)
+  putStrLn $ "~~entityの辞書~~ "
+  putStrLn $ (show entitiesIndex) ++ " " ++ (show entitiesNum) ++ "個"
   -- id->entityのマップ
   -- let entityMap = Map.fromList entitiesIdx
   -- putStrLn $ "Entity Map: " ++ show entityMap
 
-  -- predsをインデックス化
-  let predsIndex = indexPreterms preds
+  -- predsの辞書
+  let predsIndex = indexPreterms [sigPreds]
   -- predsの総数
   let predsNum = length predsIndex
-  putStrLn $ (show predsIndex) ++ " " ++ (show predsNum)
+  putStrLn $ "~~述語の辞書~~ "
+  putStrLn $ (show predsIndex) ++ " " ++ (show predsNum) ++ "個"
   -- id->述語のマップ
   -- let predsIdxMap = Map.fromList indexPreds
   -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
-  putStrLn $ show entitiesNum ++ "," ++ show predsNum
+  -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
+
+  -- 成り立つpreds
+  putStrLn $ "~~成り立つ述語~~ "
+  putStrLn $ show preds
+  -- id->述語のマップ
+  -- let predsIdxMap = Map.fromList indexPreds
+  -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
+  -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
 
 indexPreterms :: [[UD.Preterm]] -> [(Int, UD.Preterm)]
 indexPreterms = snd . L.foldl' addIndexedGroup (0, [])
@@ -146,6 +153,24 @@ printList ((text, preterm):xs) = do
     print preterm
     printList xs
     putStr ""
+
+isEntity :: (UD.Preterm, UD.Preterm) -> Bool
+isEntity (_, (UD.Con cname)) = cname == "entity"
+isEntity _ = False
+
+-- isPred :: (UD.Preterm, UD.Preterm) -> Bool
+-- isPred (tm, ty) = 
+--   trace ("tm : " ++ show tm ++ "ty : " ++ show ty) $
+--   case ty of
+--     UD.App f x -> True
+--     _ -> False
+
+containsFunctionType :: UD.Preterm -> Bool
+containsFunctionType term = case term of
+    UD.Pi _ _ -> True
+    UD.Lam _ -> True
+    UD.App f x -> containsFunctionType f || containsFunctionType x
+    _ -> False
 
 -- | checks if premises entails hypothesis
 checkEntailment :: Int         -- ^ beam width
