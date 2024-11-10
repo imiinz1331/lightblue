@@ -76,7 +76,7 @@ strToEntityPred beam nbest str = do
   printList sig -- :: [(T.Text,Preterm)] (= UD.Signature)
   
   let initialEnv = map snd sig
-      judges = Ty.getJudgements initialEnv [(x, y) | (_, x) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
+      judges = Ty.getJudgements initialEnv [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
       entitiesJudges = map fst judges -- :: [[UJudgement]]   
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
