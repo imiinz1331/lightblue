@@ -114,15 +114,13 @@ strToEntityPred beam nbest str = do
 
    -- 成り立つpreds
   putStrLn $ "~~成り立つ述語~~ "
-  putStrLn $ show $ concat correctPreds
-
-  -- TODO : n項述語ごとに分ける
-  let groupedPreds = groupPredicatesByArity correctPreds
-  mapM_ (\(arity, preds) -> do
-        putStrLn $ show arity ++ "項述語:"
-        mapM_ (putStrLn . show) preds
-        putStrLn ""
-    ) $ Map.toList groupedPreds
+  let groupedPreds = groupPredicatesByArity $ concat correctPreds
+  -- mapM_ (\(arity, preds) -> do
+  --       putStrLn $ show arity ++ "項述語:"
+  --       mapM_ (putStrLn . show) preds
+  --       putStrLn ""
+  --   ) $ Map.toList groupedPreds
+  putStrLn $ show $ Map.toList groupedPreds
 
   -- id->述語のマップ
   -- let predsIdxMap = Map.fromList indexPreds
@@ -180,9 +178,9 @@ containsFunctionType term = case term of
     UD.App f x -> containsFunctionType f || containsFunctionType x
     _ -> False
 
-groupPredicatesByArity :: [[UD.Preterm]] -> Map.Map Int [UD.Preterm]
+groupPredicatesByArity :: [UD.Preterm] -> Map.Map Int [UD.Preterm]
 groupPredicatesByArity predicates = 
-    Map.fromListWith (++) $ concatMap groupSingle predicates
+    Map.fromListWith (++) $ groupSingle predicates
   where
     groupSingle preds = [(countArgs p, [p]) | p <- preds]
 
