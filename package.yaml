@@ -44,6 +44,9 @@ dependencies:
   - serialise >= 0.2.4
   - list-t >= 1.0.0.0
   - store >= 0.7.14
+  - transformers >=0.5.6.2
+  # - binary
+  # - hasktorch >= 0.2
 
 library:
   source-dirs: src

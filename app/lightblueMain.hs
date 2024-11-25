@@ -46,15 +46,9 @@ data Command =
   | JSeM NLI.ProverName String Int
   | Numeration 
   | Demo
-<<<<<<< HEAD
-  | Treebank
-  | JSeMParser
-  | NeuralDTS
-=======
   | Version
   | Stat
   | Test
->>>>>>> master
     deriving (Show, Eq)
 
 --commandReader :: String -> a -> String -> [(a,String)]
@@ -107,19 +101,6 @@ optionParser =
                  (progDesc "Shows all the lexical items in each of the numeration for the inupt sentences." ))
       <> command "demo"
            (info (pure Demo)
-<<<<<<< HEAD
-                 (progDesc "sequentially shows parsing results of a given corpus. No local options." ))
-      <> command "treebank"
-           (info (pure Treebank)
-                 (progDesc "print a semantic treebank build from a given corpus. No local options" ))
-      <> command "jsemparser"
-           (info (pure JSeMParser)
-                 (progDesc "parse a jsem file. No local options" ))
-      <> command "neuraldts"
-           (info (pure NeuralDTS)
-                 (progDesc "Local options: [-p|--prover dts|coq] (The default values: -p dts)" ))
-      <> metavar "COMMAND (=parse|infer|debug|demo)"
-=======
                  (progDesc "Sequentially shows parsing results of a given corpus. No local options." ))
       <> command "version"
            (info (pure Version)
@@ -140,7 +121,6 @@ optionParser =
       --      (info (pure Treebank)
       --            (progDesc "print a semantic treebank build from a given corpus. No local options" ))
       <> metavar "COMMAND (=parse|jsem|numeration|demo|version|stat)"
->>>>>>> master
       <> commandGroup "Available COMMANDs and thier local options"
       <> help "specifies the task to execute.  See 'Available COMMANDs ...' below about local options for each command"
       )
@@ -297,49 +277,49 @@ lightblueMain (Options commands style filepath morphaName beamW nParse nTypeChec
     --
     -- | JSeM Parser
     -- 
-    lightblueMainLocal (JSeM proverName jsemID nSample) lr contents = do
-      parsedJSeM <- J.xml2jsemData $ T.toStrict contents
-      forM_ parsedJSeM $ \jsem -> do
-        putStr $ show $ J.answer jsem
-        S.putChar '\t'
-        mapM_ StrictT.putStr $ J.premises jsem
-        S.putChar '\t' 
-        StrictT.putStrLn $ J.hypothesis jsem
+    -- lightblueMainLocal (JSeM proverName jsemID nSample) lr contents = do
+    --   parsedJSeM <- J.xml2jsemData $ T.toStrict contents
+    --   forM_ parsedJSeM $ \jsem -> do
+    --     putStr $ show $ J.answer jsem
+    --     S.putChar '\t'
+    --     mapM_ StrictT.putStr $ J.premises jsem
+    --     S.putChar '\t' 
+    --     StrictT.putStrLn $ J.hypothesis jsem
     -- 
     -- | Neural DTS
     -- 
-    lightblueMainLocal NeuralDTS contents = do
-      -- let handle = S.stdout;
-      Prover.strToEntityPred beamw nbest (T.lines contents)
-      let parsedJSeM'
-            | jsemID == "all" = parsedJSeM
-            | otherwise = dropWhile (\j -> (J.jsem_id j) /= (StrictT.pack jsemID)) parsedJSeM
-          parsedJSeM''
-            | nSample < 0 = parsedJSeM'
-            | otherwise = take nSample parsedJSeM'
-          handle = S.stdout
-          parseSetting = CP.ParseSetting jpOptions lr beamW nParse nTypeCheck nProof True Nothing Nothing noInference verbose
-          prover = NLI.getProver proverName $ QT.ProofSearchSetting (Just maxDepth) Nothing (Just QT.Classical)
-      S.hPutStrLn handle $ I.headerOf style
-      pairs <- forM parsedJSeM'' $ \j -> do
-        let title = "JSeM-ID " ++ (StrictT.unpack $ J.jsem_id j)
-        S.putStr $ "[" ++ title ++ "] "
-        mapM_ StrictT.putStr $ J.premises j
-        S.putStr " ==> "
-        StrictT.putStrLn $ J.hypothesis j
-        S.putStr "\n"
-        let sentences = reverse $ (T.fromStrict $ J.hypothesis j):(map T.fromStrict $ J.premises j)
-            parseResult = NLI.parseWithTypeCheck parseSetting prover [("dummy",DTT.Entity)] [] sentences
-        NLI.printParseResult handle style 1 noTypeCheck False title parseResult
-        inferenceLabels <- toList $ NLI.trawlParseResult parseResult
-        let groundTruth = J.jsemLabel2YesNo $ J.answer j
-            prediction = case inferenceLabels of
-              [] -> J.Other
-              (bestLabel:_) -> bestLabel
-        S.putStrLn $ "\nPrediction: " ++ (show prediction) ++ "\nGround truth: " ++ (show groundTruth) ++ "\n"
-        return (prediction, groundTruth)
-      T.putStrLn $ T.fromStrict $ NLP.showClassificationReport pairs
-      S.hPutStrLn handle $ I.footerOf style
+    -- lightblueMainLocal NeuralDTS contents = do
+    --   -- let handle = S.stdout;
+    --   Prover.strToEntityPred beamw nbest (T.lines contents)
+    --   let parsedJSeM'
+    --         | jsemID == "all" = parsedJSeM
+    --         | otherwise = dropWhile (\j -> (J.jsem_id j) /= (StrictT.pack jsemID)) parsedJSeM
+    --       parsedJSeM''
+    --         | nSample < 0 = parsedJSeM'
+    --         | otherwise = take nSample parsedJSeM'
+    --       handle = S.stdout
+    --       parseSetting = CP.ParseSetting jpOptions lr beamW nParse nTypeCheck nProof True Nothing Nothing noInference verbose
+    --       prover = NLI.getProver proverName $ QT.ProofSearchSetting (Just maxDepth) Nothing (Just QT.Classical)
+    --   S.hPutStrLn handle $ I.headerOf style
+    --   pairs <- forM parsedJSeM'' $ \j -> do
+    --     let title = "JSeM-ID " ++ (StrictT.unpack $ J.jsem_id j)
+    --     S.putStr $ "[" ++ title ++ "] "
+    --     mapM_ StrictT.putStr $ J.premises j
+    --     S.putStr " ==> "
+    --     StrictT.putStrLn $ J.hypothesis j
+    --     S.putStr "\n"
+    --     let sentences = reverse $ (T.fromStrict $ J.hypothesis j):(map T.fromStrict $ J.premises j)
+    --         parseResult = NLI.parseWithTypeCheck parseSetting prover [("dummy",DTT.Entity)] [] sentences
+    --     NLI.printParseResult handle style 1 noTypeCheck False title parseResult
+    --     inferenceLabels <- toList $ NLI.trawlParseResult parseResult
+    --     let groundTruth = J.jsemLabel2YesNo $ J.answer j
+    --         prediction = case inferenceLabels of
+    --           [] -> J.Other
+    --           (bestLabel:_) -> bestLabel
+    --     S.putStrLn $ "\nPrediction: " ++ (show prediction) ++ "\nGround truth: " ++ (show groundTruth) ++ "\n"
+    --     return (prediction, groundTruth)
+    --   T.putStrLn $ T.fromStrict $ NLP.showClassificationReport pairs
+    --   S.hPutStrLn handle $ I.footerOf style
     -- | 
     -- | Numeration
     -- | 

@@ -22,6 +22,7 @@ module DTS.NaturalLanguageInference (
   , parseWithTypeCheck
   , printParseResult
   , trawlParseResult
+  , 
   ) where
 
 import Control.Monad (when,forM_,join)    --base

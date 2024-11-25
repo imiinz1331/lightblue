@@ -2,6 +2,11 @@ resolver: lts-18.28
 
 flags: {}
 
+extra-include-dirs:
+- ../hasktorch/deps/pytorch/torch/include
+- ../hasktorch/deps/pytorch/torch/csrc/api/include
+- /Users/iinumamizuki/.pyenv/versions/miniforge3-4.10.1-5/envs/pytorch/include
+
 extra-deps:
 - git: http://github.com/DaisukeBekki/JSeM
   commit: c2cd39168e267007b4690dbf625329bac57a8185
@@ -10,6 +15,27 @@ extra-deps:
 # 1bf4e582c603c823a89c3dfd1fba0ab4d3d8899a
 #  - git: git@github.com:DaisukeBekki/hasktorch-tools.git
 #    commit: 936928cdee27e179a5e3775d146046b107b0eba1
+# - ../hasktorch/codegen
+# - ../hasktorch/libtorch-ffi
+# - ../hasktorch/libtorch-ffi-helper
+# - ../hasktorch/hasktorch
+# # - ../hasktorch-tools
+# - git: git@github.com:DaisukeBekki/nlp-tools.git
+#   commit: 0b6912850dbffd14ed16c3fa26a0773c877ba093
+# - git: http://github.com/DaisukeBekki/JSeM.git
+#   commit: b725e62dd66cbbb4fe891ee84108d7a398f5dd71
+# - git: https://github.com/fpco/inline-c
+#   commit: ef87fbae38ed9f646b912f94606d895d0582f1b4
+#   subdirs:
+#   - inline-c
+#   - inline-c-cpp
+#  - git: git@github.com:DaisukeBekki/hasktorch-tools.git
+#    commit: 936928cdee27e179a5e3775d146046b107b0eba1
+
+packages:
+- .
+
+allow-newer: true
 
 allow-newer: true
 
