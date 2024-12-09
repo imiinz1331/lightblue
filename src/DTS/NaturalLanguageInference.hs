@@ -28,6 +28,7 @@ module DTS.NaturalLanguageInference (
 import Control.Monad (when,forM_,join)    --base
 import Control.Monad.State (lift)         --mtl
 import Control.Monad.IO.Class (liftIO)    --base
+import Control.Applicative ((<|>))          --base
 import qualified System.IO as S           --base
 import qualified Data.Char as C           --base
 import qualified Data.Text.Lazy as T      --text
@@ -35,6 +36,7 @@ import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import ListT (ListT(..),fromFoldable,toList,take,null) --list-t
 import qualified Parser.ChartParser as CP      --lightblue
+import qualified Parser.PartialParsing as Partial --lightblue
 import qualified Parser.CCG as CCG             --lightblue
 import Interface                               --lightblue
 import Interface.Text                          --lightblue
@@ -121,11 +123,13 @@ parseWithTypeCheck ps prover signtr contxt (text:texts) =
     -- |               =fmap(foldable)=> ListT IO (ListT IO CCG.Node)
     -- |               =join=>           ListT IO CCG.Node
     -- |               =take n=>         ListT IO CCG.Node
-    node <- takeNbest (CP.nParse ps) $ join $ fmap fromFoldable $ lift $ CP.simpleParse ps text 
+    node <- takeNbest (CP.nParse ps) $ join $ fmap fromFoldable $ lift $ Partial.simpleParse ps text 
     let signtr' = L.nub $ (CCG.sig node) ++ signtr
-        tcQuery = UDTT.Judgment signtr' contxt (CCG.sem node) DTT.Type
-    return $ ParseTreeAndFelicityChecks node signtr' tcQuery $ do
-               tcDiagram <- takeNbest (CP.nTypeCheck ps) $ TY.typeCheck prover (CP.verbose ps) tcQuery
+        tcQueryType = UDTT.Judgment signtr' contxt (CCG.sem node) DTT.Type
+        tcQueryKind = UDTT.Judgment signtr' contxt (CCG.sem node) DTT.Kind
+    return $ ParseTreeAndFelicityChecks node signtr' tcQueryType $ do
+               tcDiagram <- takeNbest (CP.nTypeCheck ps) $ (TY.typeCheck prover (CP.verbose ps) tcQueryType)
+                                                           <|> (TY.typeCheck prover (CP.verbose ps) tcQueryKind)
                let contxt' = (DTT.trm $ Tree.node tcDiagram):contxt
                return (tcDiagram, parseWithTypeCheck ps prover signtr' contxt' texts)
 
