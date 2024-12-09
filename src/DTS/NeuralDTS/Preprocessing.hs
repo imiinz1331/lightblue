@@ -21,6 +21,7 @@ import qualified DTS.DTTdeBruijn as DTTdB
 import qualified DTS.UDTTdeBruijn as UDTTdB
 import qualified DTS.UDTTwithName as UDTTwN
 import qualified DTS.QueryTypes as QT
+import Debug.Trace
 
 -- -- | A type of an element of a type signature, that is, a list of pairs of a preterm and a type.
 -- -- ex. [entity:type, state:type, event:type, student:entity->type]
@@ -39,7 +40,7 @@ import qualified DTS.QueryTypes as QT
 
 -- termとtypeを受け取って([entity], [述語])のlistを得る
 getJudgements :: DTTdB.Signature -> DTTdB.Context -> [(DTTdB.Preterm, DTTdB.Preterm)] -> [([DTTdB.Judgment], [DTTdB.Judgment])]
-getJudgements signature context [] = []
+getJudgements _ _ [] = []
 getJudgements signature context ((tm, ty) : rest) =
   let newPairs = loop context (tm, ty)
       newJudgements = map (\(tm2, ty2) -> DTTdB.Judgment {
@@ -57,26 +58,37 @@ getJudgements signature context ((tm, ty) : rest) =
       isPred (DTTdB.Judgment _ _ _ ty) = 
           case ty of
             DTTdB.App f x ->
+                trace ("Checking isPred for: " ++ show ty) $
                 not (containsFunctionType f) && 
                 not (containsFunctionType x)
             _ -> False
 
 containsFunctionType :: DTTdB.Preterm -> Bool
 containsFunctionType term = case term of
-    DTTdB.Pi _ _ -> True
-    DTTdB.Lam _ -> True
-    DTTdB.App f x -> containsFunctionType f || containsFunctionType x
+    DTTdB.Pi _ _ -> trace ("Pi found in: " ++ show term) True
+    DTTdB.Lam _ -> trace ("Lambda found in: " ++ show term) True
+    DTTdB.App f x -> trace ("App found in: " ++ show term) $ containsFunctionType f || containsFunctionType x
     _ -> False
+
+-- loop :: DTTdB.Context -> (DTTdB.Preterm, DTTdB.Preterm) -> [(DTTdB.Preterm, DTTdB.Preterm)]
+-- loop env (tm, ty) = case ty of
+--     DTTdB.Sigma _ _ ->
+--       let sigmaResult = sigmaE (tm, ty)
+--       in concatMap (loop env) sigmaResult
+--     _ -> [(tm, ty)]
 
 loop :: DTTdB.Context -> (DTTdB.Preterm, DTTdB.Preterm) -> [(DTTdB.Preterm, DTTdB.Preterm)]
 loop env (tm, ty) = case ty of
     DTTdB.Sigma _ _ ->
       let sigmaResult = sigmaE (tm, ty)
-      in concatMap (loop env) sigmaResult
+      in trace ("Sigma Result: " ++ show sigmaResult) $
+         concatMap (loop env) sigmaResult
     _ -> [(tm, ty)]
 
 sigmaE :: (DTTdB.Preterm, DTTdB.Preterm) -> [(DTTdB.Preterm, DTTdB.Preterm)]
-sigmaE (m, (DTTdB.Sigma a b)) = [((DTTdB.Proj DTTdB.Fst m), a), ((DTTdB.Proj DTTdB.Snd m), (DTTdB.subst b (DTTdB.Proj DTTdB.Fst m) 0))]
+sigmaE (m, (DTTdB.Sigma a b)) = 
+    [((DTTdB.Proj DTTdB.Fst m), a), ((DTTdB.Proj DTTdB.Snd m), (DTTdB.subst b (DTTdB.Proj DTTdB.Fst m) 0))]
+sigmaE _ = []
 
 {-
 -- テスト関数

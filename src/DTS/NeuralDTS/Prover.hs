@@ -1,5 +1,6 @@
 {-# OPTIONS -Wall #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-deprecations #-}
 
 {-|
 Module      : DTS.Prover
@@ -12,21 +13,24 @@ A Prover-Interfaces for DTS.
 -}
 
 module DTS.NeuralDTS.Prover (
+  getEntitiesPreds,
+  testStrToEntityPred,
   strToEntityPred
   ) where
 
 import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
-import Control.Monad (when,forM_,join) 
-import Control.Monad.Trans.List (ListT, runListT)
+import Control.Monad (when,forM_,join)
 import Control.Monad.State (lift)         --mtl
 import Control.Monad.IO.Class (liftIO)    --base
 import qualified Data.Map as Map
 import qualified Data.Maybe (mapMaybe, fromMaybe)
+import ListT (ListT(..),toList)
 -- import ListT (ListT(..),fromFoldable,toList,take,null) 
+
 import qualified Parser.ChartParser as CP
-import qualified Parser.CCG as CCG 
+import qualified Parser.CCG as CCG
 import qualified Parser.Language.Japanese.Templates as TP
 import qualified Interface.HTML as HTML
 import qualified Interface.Text as T
@@ -43,14 +47,43 @@ import qualified DTS.NeuralDTS.Preprocessing as PP
 import qualified System.IO as S
 import Debug.Trace
 
+-- getEntitiesPreds :: T.Text -> IO()
+getEntitiesPreds contents = do
+  let handle = S.stdout
+  parseSetting <- CP.defaultParseSetting
+  let prover = NLI.getProver NLI.Wani $ QT.ProofSearchSetting (Just 9) Nothing (Just QT.Intuitionistic)
+  let parseResult = NLI.parseWithTypeCheck parseSetting prover [("dummy",DTT.Entity)] [] $ T.lines contents
+  -- let posTagOnly = False
+  -- NLI.printParseResult handle I.HTML 1 False posTagOnly "" parseResult 
+  sigAndSrs <- extractSigAndSrs parseResult
+  let (sigs, queries) = unzip sigAndSrs
+  if not (null sigs) && not (null queries)
+    then do
+      let lastSig = last sigs
+      let lastQuery = last queries
+      putStrLn "Last Signature:"
+      T.putStrLn $ T.toText lastSig
+      putStrLn "Last Query:"
+      T.putStrLn $ T.toText lastQuery
+    else
+      putStrLn "No elements in sigs or queries"
+
+-- ParseResultからsigとsrを取り出す
+extractSigAndSrs :: NLI.ParseResult -> IO [(DTT.Signature, UDTT.TypeCheckQuery)]
+extractSigAndSrs parseResult = case parseResult of
+  NLI.SentenceAndParseTrees _ parseTrees -> do
+    parseTrees' <- toList parseTrees
+    return $ map (\(NLI.ParseTreeAndFelicityChecks _ sig query _) -> (sig, query)) parseTrees'
+  _ -> return []  -- 他のケースは無視  
+
 strToEntityPred :: CP.ParseSetting -> Int ->  DTT.Signature -> DTT.Context -> [T.Text] -> IO ()
 strToEntityPred ps nbest signtr contxt str = do
   -- 文に番号を振る
   let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str
-  
+
   -- 文ごとに解析を行う
   nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ CP.simpleParse ps s) numberedStr
-  
+
   let pairslist = map (map (\(num, node) -> (num, node, UDTT.betaReduce $ UDTT.sigmaElimination $ CP.sem node)) . take nbest) nodeslist;
       chosenlist = choice pairslist
       nodeSRlist = map unzip3 chosenlist
@@ -60,13 +93,12 @@ strToEntityPred ps nbest signtr contxt str = do
     --   sig = L.nub $ (CCG.sig (head nodeslist)) ++ signtr
       sig = L.nub $ concatMap (\(_, nodes, _) -> concatMap CCG.sig nodes) nodeSRlist ++ signtr
 
-  -- 型チェック結果を表示する
   putStrLn $ "~~srs~~"
-  printList srs 
-  
+  printList srs
+
   putStrLn $ "~~sig~~"
   printList sig
-  
+
   -- let initialEnv = map snd sig
       -- judges = PP.getJudgements initialEnv [((DTTdB.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
 --   let judges = PP.getJudgements sig contxt [((DTTdB.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]    
@@ -74,7 +106,13 @@ strToEntityPred ps nbest signtr contxt str = do
                                        Just val -> val  -- 変換結果が Just の場合
                                        Nothing  -> DTTdB.Con("None"))  -- Nothing の場合にデフォルト値を返す
                    | (x, y) <- srs ]
-      judges = PP.getJudgements sig contxt convertedSrs   
+      -- judges = PP.getJudgements sig contxt convertedSrs
+      -- judges = trace ("Judgements: " ++ show (PP.getJudgements sig contxt convertedSrs)) $
+      --        PP.getJudgements sig contxt convertedSrs
+      judges = trace ("Signature (sig): " ++ show sig) $
+                trace ("Context (contxt): " ++ show contxt) $
+                trace ("Converted Srs: " ++ show convertedSrs) $
+                PP.getJudgements sig contxt convertedSrs
       entitiesJudges = map fst judges -- :: [[UJudgement]]   
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
@@ -83,7 +121,7 @@ strToEntityPred ps nbest signtr contxt str = do
   let (tmp1, others) = L.partition isEntity [((DTTdB.Con x), y) | (x, y) <- sig]
       allEntities = entities ++ [map fst tmp1]
       sigPreds = map fst others
-  
+
   -- entitiesの辞書
   let entitiesIndex = pretermsIndex allEntities
   -- entityの総数
@@ -113,7 +151,7 @@ strToEntityPred ps nbest signtr contxt str = do
   --       mapM_ (putStrLn . show) preds
   --       putStrLn ""
   --   ) $ Map.toList groupedPreds
-  putStrLn $ show $ Map.toList groupedPreds
+  trace ("Grouped Predicates: " ++ show groupedPreds) $ putStrLn $ show $ Map.toList groupedPreds
 
   -- id->述語のマップ
   -- let predsIdxMap = Map.fromList indexPreds
@@ -122,12 +160,13 @@ strToEntityPred ps nbest signtr contxt str = do
 
 choice :: [[a]] -> [[a]]
 choice [] = [[]]
+choice (a:as) = [x:xs | x <- a, xs <- choice as]
 
 indexPreterms :: [[DTTdB.Preterm]] -> [(Int, DTTdB.Preterm)]
 indexPreterms = snd . L.foldl' addIndexedGroup (0, [])
   where
     addIndexedGroup :: (Int, [(Int, DTTdB.Preterm)]) -> [DTTdB.Preterm] -> (Int, [(Int, DTTdB.Preterm)])
-    addIndexedGroup (startIndex, acc) group = 
+    addIndexedGroup (startIndex, acc) group =
       let indexed = zip [startIndex..] group
           newIndex = startIndex + length group
       in (newIndex, acc ++ indexed)
@@ -136,7 +175,7 @@ pretermsIndex :: [[DTTdB.Preterm]] -> [(DTTdB.Preterm, Int)]
 pretermsIndex = snd . L.foldl' addIndexedGroup (0, [])
   where
     addIndexedGroup :: (Int, [(DTTdB.Preterm, Int)]) -> [DTTdB.Preterm] -> (Int, [(DTTdB.Preterm, Int)])
-    addIndexedGroup (startIndex, acc) group = 
+    addIndexedGroup (startIndex, acc) group =
       let indexed = [(term, index) | (index, term) <- zip [startIndex..] group]
           newIndex = startIndex + length group
       in (newIndex, acc ++ indexed)
@@ -175,7 +214,7 @@ containsFunctionType term = case term of
     _ -> False
 
 groupPredicatesByArity :: [DTTdB.Preterm] -> Map.Map Int [DTTdB.Preterm]
-groupPredicatesByArity predicates = 
+groupPredicatesByArity predicates =
     Map.fromListWith (++) $ groupSingle predicates
   where
     groupSingle preds = [(countArgs p, [p]) | p <- preds]
@@ -185,8 +224,20 @@ countArgs :: DTTdB.Preterm -> Int
 countArgs term = countArgsFromString (show term)
 
 countArgsFromString :: String -> Int
-countArgsFromString s = 
+countArgsFromString s =
     let withoutOuterParens = T.pack $ init $ tail $ dropWhile (/= '(') s
         args = T.splitOn (T.pack ",") withoutOuterParens
     -- in trace ("Split args: " ++ show args) $
     in length args
+
+-- テスト関数
+
+testStrToEntityPred :: IO ()
+testStrToEntityPred = do
+    ps <- CP.defaultParseSetting
+    let nbest = 1
+        signature = []
+        context = []
+        inputSentences = [ "犬が走る", "猫が眠る" ]
+    putStrLn "=== Test for strToEntityPred ==="
+    strToEntityPred ps nbest signature context (map T.pack inputSentences)
