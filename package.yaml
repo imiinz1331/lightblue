@@ -37,6 +37,11 @@ dependencies:
   - hexpat >= 0.20
   - parsec >= 3.1.14
   - filepath >= 1.4
+  - hasktorch >= 0.2
+  - hasktorch-tools
+  - random
+  - binary
+  - nlp-tools
 
 library:
   source-dirs: src

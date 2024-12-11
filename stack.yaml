@@ -1,12 +1,40 @@
-resolver: lts-18.28
+resolver: lts-20.26
 
 flags: {}
 
+extra-include-dirs:
+- ../../.local/lib/hasktorch/deps/libtorch/include/torch/csrc/api/include
+- ../../.local/lib/hasktorch/deps/libtorch/include
+
+extra-lib-dirs:
+- ../../.local/lib/hasktorch/deps/libtorch/lib
+- ../../.local/lib/hasktorch/deps/libtokenizers/lib
+- ../../.local/lib/hasktorch/deps/mklml/lib
+
 extra-deps:
-  - git: http://github.com/DaisukeBekki/JSeM.git
-    commit: b725e62dd66cbbb4fe891ee84108d7a398f5dd71
+- git: http://github.com/DaisukeBekki/JSeM.git
+  commit: b725e62dd66cbbb4fe891ee84108d7a398f5dd71
+- ../../.local/lib/hasktorch/codegen
+- ../../.local/lib/hasktorch/libtorch-ffi
+- ../../.local/lib/hasktorch/libtorch-ffi-helper
+- ../../.local/lib/hasktorch/hasktorch
+- ../../.local/lib/hasktorch-tools
+- git: https://github.com/DaisukeBekki/nlp-tools.git
+  commit: 0b6912850dbffd14ed16c3fa26a0773c877ba093
+- inline-c-0.9.1.10
+- inline-c-cpp-0.5.0.2
+# TODO:githubのhasktorch-toolsにする
 #  - git: git@github.com:DaisukeBekki/hasktorch-tools.git
 #    commit: 936928cdee27e179a5e3775d146046b107b0eba1
+# - json-stream-0.4.4.2@sha256:f840c692db1f47f6d6b08c56fc0ba0a567be426b9ae9e6739fe73d52136e6d91,4985
+# - git: https://github.com/fpco/inline-c
+#   commit: 2d0fe9b2f0aa0e1aefc7bfed95a501e59486afb0
+#   subdirs:
+#   - inline-c
+# - git: https://github.com/fpco/inline-c
+#   commit: 2d0fe9b2f0aa0e1aefc7bfed95a501e59486afb0
+#   subdirs:
+#   - inline-c-cpp
 
 build:
   haddock: false
