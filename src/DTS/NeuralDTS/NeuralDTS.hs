@@ -20,6 +20,8 @@ import DTS.NeuralDTS.PreProcess (extractPredicateName, getTrainRelations, getTes
 import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel)
 import Data.Map (mapMaybe)
 
+inputsDir = "src/DTS/NeuralDTS/inputs"
+
 processAndTrain :: Int -> Int -> [T.Text] -> [T.Text] -> IO ()
 processAndTrain beam nbest posStr negStr = do
   (posTrainRelations, negTrainRelations) <- getTrainRelations beam nbest posStr negStr -- :: [((Int, Int), Int)]
@@ -49,30 +51,52 @@ addLabel dataList label = map (\x -> (x, fromIntegral label :: Float)) dataList
 pretermsIndex :: Ord a => [a] -> [(a, Int)]
 pretermsIndex xs = zip (L.nub xs) [0..]
 
+-- CSVファイルを読み込む関数
+readCsv :: FilePath -> IO [T.Text]
+readCsv path = do
+  content <- S.readFile path
+  return $ T.lines (T.pack content)
+
 testProcessAndTrain :: IO()
 testProcessAndTrain = do
   let beam = 1
       nbest = 1
-      posStr = [ T.pack "太郎が走る"
-               , T.pack "太郎が踊る"
-               , T.pack "次郎が走る"
-               , T.pack "ジョンが吠える"
-               , T.pack "犬が走る"
-               , T.pack "猫が跳ぶ"
-               , T.pack "鳥が飛ぶ"
-               , T.pack "魚が泳ぐ"
-               , T.pack "車が走る"
-               ]
-      negStr = [ T.pack "ジョンが踊る"
-               , T.pack "太郎が吠える"
-               , T.pack "次郎が吠える"
-               , T.pack "花子が走る"
-               , T.pack "猫が泳ぐ"
-               , T.pack "鳥が跳ぶ"
-               , T.pack "魚が飛ぶ"
-               , T.pack "車が泳ぐ"
-               , T.pack "太郎が飛ぶ"
-               ]
-      testStr = [T.pack "次郎が踊る"]
+
+  -- CSVファイルを読み込む
+  posStr <- readCsv (inputsDir ++ "/posStr.csv")
+  negStr <- readCsv (inputsDir ++ "/negStr.csv")
+
+  -- テストデータを定義
+  let testStr = [T.pack "次郎が踊る"]
+
+  -- トレーニングとテストを実行
   processAndTrain beam nbest posStr negStr
   processAndTest beam nbest testStr
+
+-- testProcessAndTrain :: IO()
+-- testProcessAndTrain = do
+--   let beam = 1
+--       nbest = 1
+--       posStr = [ T.pack "太郎が走る"
+--                , T.pack "太郎が踊る"
+--                , T.pack "次郎が走る"
+--                , T.pack "ジョンが吠える"
+--                , T.pack "犬が走る"
+--                , T.pack "猫が跳ぶ"
+--                , T.pack "鳥が飛ぶ"
+--                , T.pack "魚が泳ぐ"
+--                , T.pack "車が走る"
+--                ]
+--       negStr = [ T.pack "ジョンが踊る"
+--                , T.pack "太郎が吠える"
+--                , T.pack "次郎が吠える"
+--                , T.pack "花子が走る"
+--                , T.pack "猫が泳ぐ"
+--                , T.pack "鳥が跳ぶ"
+--                , T.pack "魚が飛ぶ"
+--                , T.pack "車が泳ぐ"
+--                , T.pack "太郎が飛ぶ"
+--                ]
+--       testStr = [T.pack "次郎が踊る"]
+--   processAndTrain beam nbest posStr negStr
+--   processAndTest beam nbest testStr
