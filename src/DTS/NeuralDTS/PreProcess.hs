@@ -49,49 +49,94 @@ readCsv path = do
   content <- readFile path
   return $ map (\line -> let [name, idx] = map T.unpack (T.splitOn "," (T.pack line)) in (name, read idx)) (lines content)
 
-getTrainRelations :: Int -> Int -> [T.Text] -> IO [((Int, Int), Int)]
-getTrainRelations beam nbest str = do
-  let (entitiesIndex, predsIndex, groupedPreds) = strToEntityPred beam nbest str
-      entityDict = map (\(ent, idx) -> (show ent, idx)) entitiesIndex
-      predDict = map (\(pred, idx) -> (show pred, idx)) predsIndex
-      
-  -- 辞書をCSVに書き出し
-  writeCsv (dataDir </> "entity_dict.csv") entityDict
-  writeCsv (dataDir </> "predicate_dict.csv") predDict
+getTrainRelations :: Int -> Int -> [T.Text] -> [T.Text] -> IO ([((Int, Int), Int)], [((Int, Int), Int)])
+getTrainRelations beam nbest posStr negStr = do
+  let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
+      negStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] negStr
 
-  let binaryPreds = Map.findWithDefault [] 2 groupedPreds -- :: [UD.Preterm]
-      relations = [((entity1ID, entity2ID), predID) |
-                  pred <- binaryPreds, -- 2項述語を順に処理
-                  predID <- maybeToList (lookupInListPartial (\key -> isPrefixOfPreterm (extractPredicateName pred) key) predsIndex),
-                  (arg1, arg2) <- extractArguments pred,
-                  entity1ID <- maybeToList (lookupInList arg1 entitiesIndex),
-                  entity2ID <- maybeToList (lookupInList arg2 entitiesIndex)]
+  -- 正解データと不正解データのgroupedPredsを別々に作成
+  let (posEntitiesIndex, posPredsIndex, posGroupedPreds) = strToEntityPred beam nbest posStrIndexed
+      (negEntitiesIndex, negPredsIndex, negGroupedPreds) = strToEntityPred beam nbest negStrIndexed
+
+  -- print posPredsIndex
+  -- print negPredsIndex
+
+  let combinedEntities = L.nubBy (\(a, _) (b, _) -> a == b) (posEntitiesIndex ++ negEntitiesIndex)
+      combinedPreds = L.nubBy (\(a, _) (b, _) -> a == b) (posPredsIndex ++ negPredsIndex)
+      entitiesMap = Map.fromListWith const (map (\(ent, idx) -> (show ent, idx)) combinedEntities)
+      predsMap = Map.fromListWith const (map (\(pred, idx) -> (show pred, idx)) combinedPreds)
+      entitiesIndex = Map.toList entitiesMap
+      predsIndex = Map.toList predsMap
+
+  -- 辞書を合体
+  -- let entitiesMap = Map.fromListWith const (map (\(ent, idx) -> (show ent, idx)) (posEntitiesIndex ++ negEntitiesIndex)) :: Map.Map String Int
+  --     predsMap = Map.fromListWith const (map (\(pred, idx) -> (show pred, idx)) (posPredsIndex ++ negPredsIndex))
+  --     entitiesIndex = Map.toList entitiesMap
+  --     predsIndex = Map.toList predsMap
+
+  -- putStrLn $ "~~entitiesIndex~~" ++ show entitiesIndex
+  -- putStrLn $ "~~predsIndex~~" ++ show predsIndex
+
+  -- 辞書をCSVに書き出し
+  writeCsv (dataDir </> "entity_dict.csv") entitiesIndex
+  writeCsv (dataDir </> "predicate_dict.csv") predsIndex
+
+  let binaryPosPreds = Map.findWithDefault [] 2 posGroupedPreds -- :: [UD.Preterm]
+      binaryNegPreds = Map.findWithDefault [] 2 negGroupedPreds -- :: [UD.Preterm]
+
+      posRelations = [((entity1ID, entity2ID), predID) |
+                      pred <- binaryPosPreds, -- 2項述語を順に処理
+                      predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
+                      (arg1, arg2) <- extractArguments pred,
+                      entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
+                      entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
+
+      negRelations = [((entity1ID, entity2ID), predID) |
+                      pred <- binaryNegPreds, -- 2項述語を順に処理
+                      predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
+                      (arg1, arg2) <- extractArguments pred,
+                      entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
+                      entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
+
+      -- relations = [((entity1ID, entity2ID), predID) |
+      --             pred <- binaryPreds, -- 2項述語を順に処理
+      --             predID <- maybeToList (lookupInListPartial (\key -> isPrefixOfPreterm (extractPredicateName pred) key) predsIndex),
+      --             (arg1, arg2) <- extractArguments pred,
+      --             entity1ID <- maybeToList (lookupInList arg1 entitiesIndex),
+      --             entity2ID <- maybeToList (lookupInList arg2 entitiesIndex)]
 
   putStrLn "Entity Dictionary written to entity_dict.csv"
   putStrLn "Predicate Dictionary written to predicate_dict.csv"
-  return relations
+  return (posRelations, negRelations)
 
 getTestRelations :: Int -> Int -> [T.Text] -> IO [((Int, Int), Int)]
 getTestRelations beam nbest str = do
   -- CSVから辞書を読み込み
-  entityDict <- readCsv (dataDir </> "entity_dict.csv")
-  predDict <- readCsv (dataDir </> "predicate_dict.csv")
+  entityDictList <- readCsv (dataDir </> "entity_dict.csv")
+  predDictList <- readCsv (dataDir </> "predicate_dict.csv")
+  let entityDict = Map.fromList entityDictList
+      predDict = Map.fromList predDictList :: Map.Map String Int
 
-  let (entitiesIndex, predsIndex, groupedPreds) = strToEntityPred beam nbest str
-      binaryPreds = Map.findWithDefault [] 2 groupedPreds -- :: [UD.Preterm]
-      relations = [((entity1ID, entity2ID), predID) |
-                  pred <- binaryPreds, -- 2項述語を順に処理
-                  predID <- maybeToList (lookupInListPartial (\key -> isPrefixOfPreterm (extractPredicateName pred) key) predsIndex),
-                  (arg1, arg2) <- extractArguments pred,
-                  entity1ID <- maybeToList (lookupInList arg1 entitiesIndex),
-                  entity2ID <- maybeToList (lookupInList arg2 entitiesIndex)]
-  putStrLn $ "Test Relations 2:" ++ show relations
-  return relations
+  let strIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str
+      (entitiesIndex, predsIndex, groupedPreds) = strToEntityPred beam nbest strIndexed
 
-strToEntityPred :: Int -> Int -> [T.Text] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
-strToEntityPred beam nbest str = unsafePerformIO $ do
+  let binaryPreds = Map.findWithDefault [] 2 groupedPreds -- :: [UD.Preterm]
+      testRelations = [((entity1ID, entity2ID), predID) |
+                       pred <- binaryPreds, -- 2項述語を順に処理
+                       predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predDict),
+                       (arg1, arg2) <- extractArguments pred,
+                       entity1ID <- maybeToList (Map.lookup (show arg1) entityDict),
+                       entity2ID <- maybeToList (Map.lookup (show arg2) entityDict)]
+
+  return testRelations
+
+-- strToEntityPred :: Int -> Int -> [T.Text] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
+strToEntityPred :: Int -> Int -> [(T.Text, T.Text)] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
+strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
   -- S1, S2, ... と文に番号を振る
-  let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str
+  -- let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str :: [(T.Text, T.Text)]
+  -- putStrLn "~~numberedStr~~"
+  -- putStrLn $ show numberedStr
   nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ CP.simpleParse beam s) numberedStr
   
   let pairslist = map (map (\(num, node) -> (num, node, UD.betaReduce $ UD.sigmaElimination $ CP.sem node)) . take nbest) nodeslist
@@ -171,6 +216,9 @@ lookupInListPartial predicate list =
     [] -> 
       Nothing
       -- trace ("lookupInListPartial: No match found") Nothing
+
+lookupInMapPartial :: (Ord k) => (k -> Bool) -> Map.Map k v -> Maybe v
+lookupInMapPartial f m = fmap snd . L.find (f . fst) $ Map.toList m
 
 isPrefixOfPreterm :: UD.Preterm -> UD.Preterm -> Bool
 isPrefixOfPreterm (UD.Con key) (UD.Con pred) =
