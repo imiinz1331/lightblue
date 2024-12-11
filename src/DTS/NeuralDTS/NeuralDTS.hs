@@ -53,8 +53,26 @@ testProcessAndTrain :: IO()
 testProcessAndTrain = do
   let beam = 1
       nbest = 1
-      posStr = [T.pack "太郎が走る", T.pack "太郎が踊る", T.pack "次郎が走る", T.pack "犬が吠える"]
-      negStr = [T.pack "犬が踊る", T.pack "太郎が吠える", T.pack "次郎が吠える"]
+      posStr = [ T.pack "太郎が走る"
+               , T.pack "太郎が踊る"
+               , T.pack "次郎が走る"
+               , T.pack "ジョンが吠える"
+               , T.pack "犬が走る"
+               , T.pack "猫が跳ぶ"
+               , T.pack "鳥が飛ぶ"
+               , T.pack "魚が泳ぐ"
+               , T.pack "車が走る"
+               ]
+      negStr = [ T.pack "ジョンが踊る"
+               , T.pack "太郎が吠える"
+               , T.pack "次郎が吠える"
+               , T.pack "花子が走る"
+               , T.pack "猫が泳ぐ"
+               , T.pack "鳥が跳ぶ"
+               , T.pack "魚が飛ぶ"
+               , T.pack "車が泳ぐ"
+               , T.pack "太郎が飛ぶ"
+               ]
       testStr = [T.pack "次郎が踊る"]
   processAndTrain beam nbest posStr negStr
   processAndTest beam nbest testStr

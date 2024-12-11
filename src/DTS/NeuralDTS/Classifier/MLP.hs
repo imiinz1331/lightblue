@@ -15,6 +15,7 @@ import Data.List (foldl', intersperse, scanl')
 import qualified Data.ByteString as B
 import qualified Data.Binary as B
 import GHC.Generics ( Generic )
+import ML.Exp.Chart (drawLearningCurve)
 import Torch
 import Torch.Control (mapAccumM, makeBatch)
 import qualified Torch.Train
@@ -26,6 +27,7 @@ import DTS.NeuralDTS.Classifier
 
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/DataSet"
+imagesDir = "src/DTS/NeuralDTS/images"
 
 data MLPSpec = MLPSpec
   { 
@@ -73,17 +75,12 @@ instance Classifier MLP where
     in nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
        $ linear linear_layer1 $ input
 
-mlp :: MLP -> Tensor -> Tensor
-mlp MLP {..} input = foldl' revApply input $ intersperse relu [linear linear_layer1, linear linear_layer2, linear linear_layer3]
-  where
-    revApply x f = f x
-
 --------------------------------------------------------------------------------
 -- Training code
 --------------------------------------------------------------------------------
 
 batchSize = 2
-numIters = 100
+numIters = 20
 myDevice = Device CUDA 0
 mode = Train
 lr = 5e-2
@@ -135,9 +132,18 @@ data2Idx = unzip3 . map idx
     idx :: ((Int, Int), Int) -> (Int, Int, Int)
     idx ((e1, e2), r) = (e1, r, e2)
 
+splitData :: [a] -> Double -> IO ([a], [a])
+splitData xs ratio = do
+  let n = round $ ratio * fromIntegral (length xs)
+  indices <- replicateM (length xs) (randomRIO (0, length xs - 1))
+  let (trainIndices, validIndices) = splitAt n indices
+  return (map (xs !!) trainIndices, map (xs !!) validIndices)
+
 trainModel :: String -> [(((Int, Int), Int), Float)] -> IO ()
 trainModel modelName trainingRelations = do
   putStrLn $ "trainModel"
+
+  (trainData, validData) <- splitData trainingRelations 0.8
 
   entityCount <- getLineCount (dataDir </> "entity_dict.csv")
   relationCount <- getLineCount (dataDir </> "predicate_dict.csv")
@@ -156,11 +162,12 @@ trainModel modelName trainingRelations = do
   initModel <- toDevice myDevice <$> sample spec
 
   -- データが空でないことを確認
-  when (null trainingRelations) $ do
+  when (null trainData && null validData) $ do
     error "Training data or labels are empty. Check your input data."
 
   -- 学習プロセス
-  let batchedTrainSet = makeBatch batchSize trainingRelations
+  let batchedTrainSet = makeBatch batchSize trainData
+  let batchedValidSet = makeBatch batchSize validData
   ((trained, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     -- putStrLn $ "epoch #" ++ show epoch
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
@@ -172,14 +179,19 @@ trainModel modelName trainingRelations = do
     -- batch の長さでlossをわる
     let batchloss = sum batchLosses / (fromIntegral (length batchLosses)::Float)
     putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
-    -- TODO : validation Data
-    -- let validLoss = calculateLoss batchModel validSet
-    let validLoss = 0.0
+    -- 検証データで評価
+    let validLoss = sum (map (calculateLoss batchModel) batchedValidSet) / fromIntegral (length batchedValidSet)
+    putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
     return (batchTrained, (batchloss, asValue validLoss::Float))
 
   -- モデルを保存
   saveModel (modelsDir </> modelName ++ ".model") trained spec
   putStrLn $ "Model saved to models/" ++ modelName ++ ".model"
+
+  -- TODO : 学習曲線
+  let (trainLosses, validLosses) = unzip losses
+  drawLearningCurve (imagesDir </> modelName ++ "learning-curve-training.png") "Learning Curve" [("", reverse trainLosses)]
+  drawLearningCurve (imagesDir </> modelName ++ "learning-curve-valid.png") "Learning Curve" [("", reverse validLosses)]
 
   where
     optimizer = GD
