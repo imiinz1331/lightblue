@@ -30,12 +30,14 @@ import Debug.Trace
 import DTS.DTT (Preterm)
 import GHC.IO (unsafePerformIO)
 import qualified Data.Set as Set
+import Control.Monad (unless)
 import Data.Maybe (maybeToList)
 import DTS.Prover (choice)
 import Data.List (nub)
 import Data.Map (mapMaybe)
+import System.Directory (doesFileExist)
 
-dataDir = "src/DTS/NeuralDTS/DataSet"
+dataDir = "src/DTS/NeuralDTS/dataSet"
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
@@ -49,6 +51,11 @@ readCsv path = S.withFile path S.ReadMode $ \h -> do
   let linesContent = lines content
       result = map (\line -> let [name, idx] = map T.unpack (T.splitOn "," (T.pack line)) in (name, read idx)) linesContent
   length result `seq` return result
+
+ensureFileExists :: FilePath -> IO ()
+ensureFileExists path = do
+  exists <- doesFileExist path
+  unless exists $ writeFile path ""
 
 getTrainRelations :: Int -> Int -> [T.Text] -> [T.Text] -> IO ([((Int, Int), Int)], [((Int, Int), Int)])
 getTrainRelations beam nbest posStr negStr = do
@@ -70,6 +77,8 @@ getTrainRelations beam nbest posStr negStr = do
       predsMap = Map.fromList predsIndex
 
   -- 辞書をCSVに書き出し
+  ensureFileExists (dataDir </> "entity_dict.csv")
+  ensureFileExists (dataDir </> "predicate_dict.csv")
   writeCsv (dataDir </> "entity_dict.csv") entitiesIndex
   writeCsv (dataDir </> "predicate_dict.csv") predsIndex
 

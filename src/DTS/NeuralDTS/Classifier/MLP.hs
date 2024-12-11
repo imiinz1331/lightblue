@@ -26,7 +26,7 @@ import System.FilePath ((</>))
 import DTS.NeuralDTS.Classifier
 
 modelsDir = "src/DTS/NeuralDTS/models"
-dataDir = "src/DTS/NeuralDTS/DataSet"
+dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 
 data MLPSpec = MLPSpec
