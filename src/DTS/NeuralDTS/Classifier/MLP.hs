@@ -25,6 +25,7 @@ import System.FilePath ((</>))
 import DTS.NeuralDTS.Classifier
 
 modelsDir = "src/DTS/NeuralDTS/models"
+dataDir = "src/DTS/NeuralDTS/DataSet"
 
 data MLPSpec = MLPSpec
   { 
@@ -72,17 +73,6 @@ instance Classifier MLP where
     in nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
        $ linear linear_layer1 $ input
 
-spec :: MLPSpec
-spec = MLPSpec
-  { entity_num_embed = 50,  -- entityの埋め込み数
-    relation_num_embed = 4,  -- 関係の埋め込み数
-    entity_features = 64,  -- entityの特徴量数
-    relation_features = 32,  -- 関係の特徴量数
-    hidden_dim1 = 128,  -- 最初の隠れ層の次元数
-    hidden_dim2 = 64,  -- 2番目の隠れ層の次元数
-    output_feature = 2  -- 出力の特徴量数
-  }
-
 mlp :: MLP -> Tensor -> Tensor
 mlp MLP {..} input = foldl' revApply input $ intersperse relu [linear linear_layer1, linear linear_layer2, linear linear_layer3]
   where
@@ -93,7 +83,7 @@ mlp MLP {..} input = foldl' revApply input $ intersperse relu [linear linear_lay
 --------------------------------------------------------------------------------
 
 batchSize = 2
-numIters = 50
+numIters = 100
 myDevice = Device CUDA 0
 mode = Train
 lr = 5e-2
@@ -101,14 +91,14 @@ lr = 5e-2
 -- model :: MLP -> Tensor -> Tensor
 -- model params t = mlp params t
 
-saveModel :: FilePath -> MLP -> IO ()
-saveModel path model = do
+saveModel :: FilePath -> MLP -> MLPSpec -> IO ()
+saveModel path model spec = do
   createDirectoryIfMissing True modelsDir
   saveParams model path
   B.encodeFile (path ++ "-spec") spec
 
-loadModel :: FilePath -> IO (Maybe MLP)
-loadModel path = do
+loadModel :: FilePath -> MLPSpec -> IO (Maybe MLP)
+loadModel path spec = do
   exists <- doesFileExist path
   if exists
     then do
@@ -117,6 +107,11 @@ loadModel path = do
       print "model loaded"
       return $ Just initModel
     else return Nothing
+
+getLineCount :: FilePath -> IO Int
+getLineCount path = do
+  content <- readFile path
+  return $ length (lines content)
 
 calculateLoss :: (Classifier n) => n -> [(((Int, Int), Int), Float)] -> Tensor
 calculateLoss model dataSet =
@@ -143,6 +138,21 @@ data2Idx = unzip3 . map idx
 trainModel :: String -> [(((Int, Int), Int), Float)] -> IO ()
 trainModel modelName trainingRelations = do
   putStrLn $ "trainModel"
+
+  entityCount <- getLineCount (dataDir </> "entity_dict.csv")
+  relationCount <- getLineCount (dataDir </> "predicate_dict.csv")
+
+  -- モデルの設定
+  let spec = MLPSpec
+        { entity_num_embed = entityCount  -- entityの埋め込み数
+        , relation_num_embed = relationCount  -- 関係の埋め込み数
+        , entity_features = 64  -- entityの特徴量数
+        , relation_features = 32  -- 関係の特徴量数
+        , hidden_dim1 = 128  -- 最初の隠れ層の次元数
+        , hidden_dim2 = 64  -- 2番目の隠れ層の次元数
+        , output_feature = 2  -- 出力の特徴量数
+        }
+
   initModel <- toDevice myDevice <$> sample spec
 
   -- データが空でないことを確認
@@ -168,7 +178,7 @@ trainModel modelName trainingRelations = do
     return (batchTrained, (batchloss, asValue validLoss::Float))
 
   -- モデルを保存
-  saveModel (modelsDir </> modelName ++ ".model") trained
+  saveModel (modelsDir </> modelName ++ ".model") trained spec
   putStrLn $ "Model saved to models/" ++ modelName ++ ".model"
 
   where
@@ -187,7 +197,20 @@ trainModel modelName trainingRelations = do
 testModel :: String -> [((Int, Int), Int)] -> IO ()
 testModel modelName testRelations = do
   putStrLn "testModel"
-  maybeModel <- loadModel (modelsDir </> modelName ++ ".model")
+
+  entityCount <- getLineCount (dataDir </> "entity_dict.csv")
+  relationCount <- getLineCount (dataDir </> "predicate_dict.csv")
+  let spec = MLPSpec
+        { entity_num_embed = entityCount  -- entityの埋め込み数
+        , relation_num_embed = relationCount  -- 関係の埋め込み数
+        , entity_features = 64  -- entityの特徴量数
+        , relation_features = 32  -- 関係の特徴量数
+        , hidden_dim1 = 128  -- 最初の隠れ層の次元数
+        , hidden_dim2 = 64  -- 2番目の隠れ層の次元数
+        , output_feature = 2  -- 出力の特徴量数
+        }
+
+  maybeModel <- loadModel (modelsDir </> modelName ++ ".model") spec
   case maybeModel of
     Nothing -> putStrLn $ "Model not found: models/" ++ modelName ++ ".model"
     Just trained -> do
@@ -198,5 +221,11 @@ testModel modelName testRelations = do
                let e2Tensor = toDevice myDevice $ asTensor ([fromIntegral e2 :: Int] :: [Int])
                let rTensor = toDevice myDevice $ asTensor ([fromIntegral p :: Int] :: [Int])
                let output = classify trained Eval e1Tensor rTensor e2Tensor
-               putStrLn $ "Test: (" ++ show e1 ++ ", " ++ show e2 ++ ", " ++ show p ++ ") -> Prediction: " ++ show output)
+               let prediction = asValue (argmax (Dim 1) RemoveDim output) :: Int
+               let (confidenceTensor, _) = maxDim (Dim 1) RemoveDim output
+               let confidence = asValue confidenceTensor :: Float
+               putStrLn $ "Test: (" ++ show e1 ++ ", " ++ show e2 ++ ", " ++ show p ++ ") -> Prediction: " ++ show prediction ++ " with confidence " ++ show confidence
+               if prediction == 1
+                 then putStrLn "Relation holds."
+                 else putStrLn "Relation does not hold.")
             testRelations
