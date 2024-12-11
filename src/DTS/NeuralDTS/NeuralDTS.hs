@@ -20,16 +20,18 @@ import DTS.NeuralDTS.PreProcess (extractPredicateName, getTrainRelations, getTes
 import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel)
 import Data.Map (mapMaybe)
 
-processAndTrain :: Int -> Int -> [T.Text] -> IO ()
-processAndTrain beam nbest str = do
-  trainRelations <- getTrainRelations beam nbest str -- :: [((Int, Int), Int)]
+processAndTrain :: Int -> Int -> [T.Text] -> [T.Text] -> IO ()
+processAndTrain beam nbest posStr negStr = do
+  (posTrainRelations, negTrainRelations) <- getTrainRelations beam nbest posStr negStr -- :: [((Int, Int), Int)]
   putStrLn "Training Relations:"
-  print trainRelations
+  print posTrainRelations
+  print negTrainRelations
 
   -- MLP モデルのトレーニング
   let modelName = "mlp-model"
-  let posTrainRelations = addLabel trainRelations 1
-  trainModel modelName posTrainRelations
+  let posTrainRelations' = addLabel posTrainRelations 1
+  let negTrainRelations' = addLabel negTrainRelations 0
+  trainModel modelName (posTrainRelations' ++ negTrainRelations')
 
 processAndTest :: Int -> Int -> [T.Text] -> IO ()
 processAndTest beam nbest str = do
@@ -51,7 +53,8 @@ testProcessAndTrain :: IO()
 testProcessAndTrain = do
   let beam = 1
       nbest = 1
-      str1 = [T.pack "太郎が走る", T.pack "太郎が歌う", T.pack "次郎が歩く", T.pack "次郎が走る"]
-      str2 = [T.pack "次郎が歌う"]
-  processAndTrain beam nbest str1
-  processAndTest beam nbest str2
+      posStr = [T.pack "太郎が走る", T.pack "太郎が踊る", T.pack "次郎が走る", T.pack "犬が吠える"]
+      negStr = [T.pack "犬が踊る", T.pack "太郎が吠える", T.pack "次郎が吠える"]
+      testStr = [T.pack "次郎が踊る"]
+  processAndTrain beam nbest posStr negStr
+  processAndTest beam nbest testStr

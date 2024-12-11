@@ -74,8 +74,8 @@ instance Classifier MLP where
 
 spec :: MLPSpec
 spec = MLPSpec
-  { entity_num_embed = 34,  -- entityの埋め込み数
-    relation_num_embed = 3,  -- 関係の埋め込み数
+  { entity_num_embed = 50,  -- entityの埋め込み数
+    relation_num_embed = 4,  -- 関係の埋め込み数
     entity_features = 64,  -- entityの特徴量数
     relation_features = 32,  -- 関係の特徴量数
     hidden_dim1 = 128,  -- 最初の隠れ層の次元数
