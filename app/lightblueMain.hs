@@ -301,9 +301,9 @@ lightblueMain (Options commands input filepath nbest beamw iftime) = do
     -- 
     -- | Neural DTS
     -- 
-    lightblueMainLocal NeuralDTS contents = do
-      -- let handle = S.stdout;
-      Prover.strToEntityPred beamw nbest (T.lines contents)
+    -- lightblueMainLocal NeuralDTS contents = do
+    --   -- let handle = S.stdout;
+    --   Prover.strToEntityPred beamw nbest (T.lines contents)
 
 -- | lightblue --version
 -- |
