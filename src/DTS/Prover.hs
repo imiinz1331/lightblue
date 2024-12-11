@@ -1,5 +1,3 @@
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# OPTIONS -Wall #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -18,7 +16,7 @@ module DTS.Prover (
   defaultProofSearch,
   checkFelicity,
   checkEntailment,
-  strToEntityPred
+  choice
   ) where
 
 import qualified Data.Text.Lazy as T      --text
@@ -33,12 +31,6 @@ import qualified Interface.Text as T
 import qualified DTS.UDTT as UD
 import qualified DTS.Prover.TypeChecker as Ty
 import qualified DTS.Prover.Judgement as Ty
-
-import qualified System.IO as S
-import Debug.Trace
-import DTS.DTT (Preterm)
-import GHC.IO (unsafePerformIO)
-import qualified Data.Set as Set
 
 -- | type check with the default signature = entity:type, evt:type
 defaultTypeCheck :: UD.Signature -> UD.Context -> UD.Preterm -> UD.Preterm -> [Ty.UTree  Ty.UJudgement]
@@ -133,163 +125,3 @@ checkEntailment beam nbest premises hypothesis = do
 choice :: [[a]] -> [[a]]
 choice [] = [[]]
 choice (a:as) = [x:xs | x <- a, xs <- choice as]
-
-
-
--- for Neural DTS
-strToEntityPred :: Int -> Int -> [T.Text] -> [((Int, Int), Int)]
-strToEntityPred beam nbest str = unsafePerformIO $ do
-  -- S1, S2, ... と文に番号を振る
-  let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str
-  nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ CP.simpleParse beam s) numberedStr
-  
-  let pairslist = map (map (\(num, node) -> (num, node, UD.betaReduce $ UD.sigmaElimination $ CP.sem node)) . take nbest) nodeslist
-      chosenlist = choice pairslist
-      nodeSRlist = map unzip3 chosenlist
-      nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
-      srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, UD.Preterm)]
-      sig = foldl L.union [] $ map CP.sig nds -- :: [(T.Text,Preterm)] (= UD.Signature)
-
-  putStrLn $ "~~srs~~"
-  printList srs 
-
-  putStrLn $ "~~sig~~"
-  printList sig
-
-  let judges = Ty.getJudgements [] [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]
-      entitiesJudges = map fst judges -- :: [[UJudgement]]
-      predsJudges = map snd judges -- :: [[UJudgement]]
-      entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
-      correctPreds = map extractTypePreterm predsJudges -- :: [[Preterm]]
-
-  let (tmp1, others) = L.partition isEntity [((UD.Con x), y) | (x, y) <- sig]
-      allEntities = entities ++ [map fst tmp1]
-      sigPreds = map fst others
-  
-  -- entitiesの辞書
-  let entitiesIndex = pretermsIndex allEntities
-  -- entityの総数
-  let entitiesNum = length entitiesIndex
-  putStrLn $ "~~entityの辞書~~ "
-  putStrLn $ (show entitiesIndex) ++ " " ++ (show entitiesNum) ++ "個"
-  -- id->entityのマップ
-  -- let entityMap = Map.fromList entitiesIndex
-  -- putStrLn $ "Entity Map: " ++ show entityMap
-
-  -- predsの辞書
-  let predsIndex = pretermsIndex [sigPreds]
-  -- predsの総数
-  let predsNum = length predsIndex
-  putStrLn $ "~~述語の辞書~~ "
-  putStrLn $ (show predsIndex) ++ " " ++ (show predsNum) ++ "個"
-  -- id->述語のマップ
-  -- let predsIdxMap = Map.fromList predsIndex
-  -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
-  -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
-
-   -- 成り立つpreds
-  putStrLn $ "~~成り立つ述語~~ "
-  let groupedPreds = groupPredicatesByArity $ concat correctPreds :: Map.Map Int [UD.Preterm]
-  -- mapM_ (\(arity, preds) -> do
-  --       putStrLn $ show arity ++ "項述語:"
-  --       mapM_ (putStrLn . show) preds
-  --       putStrLn ""
-  --   ) $ Map.toList groupedPreds
-  putStrLn $ show $ Map.toList groupedPreds
-
-  -- id->述語のマップ
-  -- let predsIdxMap = Map.fromList indexPreds
-  -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
-  -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
-
-  let binaryPreds = Map.findWithDefault [] 2 groupedPreds -- :: [UD.Preterm]
-  -- let entitiesMap = Map.fromList entitiesIndex -- :: Map.Map UD.Preterm Int
-  -- let predsMap = Map.fromList predsIndex       -- :: Map.Map UD.Preterm Int
-
-  -- let entityIDs = Map.keys entitiesMap -- エンティティのリスト
-  -- let relations = [((entitiesMap Map.! entity1, entitiesMap Map.! entity2), predsMap Map.! pred) |
-  --                pred <- binaryPreds,
-  --                entity1 <- entityIDs,
-  --                entity2 <- entityIDs]
-
-  let relations = [((entity1ID, entity2ID), predID) |
-                  (entity1, entity1ID) <- entitiesIndex,       -- entitiesIndex からエンティティ1を取得
-                  (entity2, entity2ID) <- entitiesIndex,       -- entitiesIndex からエンティティ2を取得
-                  pred <- binaryPreds,                         -- binaryPreds から述語を取得
-                  Just predID <- [lookupInList pred predsIndex]] -- predsIndex から述語IDを検索
-
-  return relations
-
-lookupInList :: Eq a => a -> [(a, b)] -> Maybe b
-lookupInList key list =
-  case filter (\(k, _) -> k == key) list of
-    ((_, value) : _) -> Just value
-    []               -> Nothing
-
-indexPreterms :: [[UD.Preterm]] -> [(Int, UD.Preterm)]
-indexPreterms = snd . L.foldl' addIndexedGroup (0, [])
-  where
-    addIndexedGroup :: (Int, [(Int, UD.Preterm)]) -> [UD.Preterm] -> (Int, [(Int, UD.Preterm)])
-    addIndexedGroup (startIndex, acc) group = 
-      let indexed = zip [startIndex..] group
-          newIndex = startIndex + length group
-      in (newIndex, acc ++ indexed)
-
-pretermsIndex :: [[UD.Preterm]] -> [(UD.Preterm, Int)]
-pretermsIndex = snd . L.foldl' addIndexedGroup (0, [])
-  where
-    addIndexedGroup :: (Int, [(UD.Preterm, Int)]) -> [UD.Preterm] -> (Int, [(UD.Preterm, Int)])
-    addIndexedGroup (startIndex, acc) group = 
-      let indexed = [(term, index) | (index, term) <- zip [startIndex..] group]
-          newIndex = startIndex + length group
-      in (newIndex, acc ++ indexed)
-
-extractTermPreterm :: [Ty.UJudgement] -> [UD.Preterm]
-extractTermPreterm = map (\(Ty.UJudgement _ preterm _) -> preterm)
-extractTypePreterm :: [Ty.UJudgement] -> [UD.Preterm]
-extractTypePreterm = map (\(Ty.UJudgement _ _ preterm) -> preterm)
-
-printList :: [(T.Text, UD.Preterm)] -> IO ()
-printList [] = return ()
-printList ((text, preterm):xs) = do
-    T.putStr "Text: "
-    T.putStrLn text
-    putStr "Preterm: "
-    print preterm
-    printList xs
-    putStr ""
-
-isEntity :: (UD.Preterm, UD.Preterm) -> Bool
-isEntity (_, (UD.Con cname)) = cname == "entity"
-isEntity _ = False
-
--- isPred :: (UD.Preterm, UD.Preterm) -> Bool
--- isPred (tm, ty) = 
---   trace ("tm : " ++ show tm ++ "ty : " ++ show ty) $
---   case ty of
---     UD.App f x -> True
---     _ -> False
-
-containsFunctionType :: UD.Preterm -> Bool
-containsFunctionType term = case term of
-    UD.Pi _ _ -> True
-    UD.Lam _ -> True
-    UD.App f x -> containsFunctionType f || containsFunctionType x
-    _ -> False
-
-groupPredicatesByArity :: [UD.Preterm] -> Map.Map Int [UD.Preterm]
-groupPredicatesByArity predicates = 
-    Map.fromListWith (++) $ groupSingle predicates
-  where
-    groupSingle preds = [(countArgs p, [p]) | p <- preds]
-
-countArgs :: UD.Preterm -> Int
--- countArgs term = trace ("Counting args for: " ++ show term) $ countArgsFromString (show term)
-countArgs term = countArgsFromString (show term)
-
-countArgsFromString :: String -> Int
-countArgsFromString s = 
-    let withoutOuterParens = T.pack $ init $ tail $ dropWhile (/= '(') s
-        args = T.splitOn (T.pack ",") withoutOuterParens
-    -- in trace ("Split args: " ++ show args) $
-    in length args
