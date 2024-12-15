@@ -30,7 +30,7 @@ import DTS.DTT (Preterm)
 import GHC.IO (unsafePerformIO)
 import qualified Data.Set as Set
 import Control.Monad (unless)
-import Data.Maybe (maybeToList)
+import Data.Maybe (maybeToList, fromJust)
 import DTS.Prover (choice)
 import Data.List (nub)
 import Data.Map (mapMaybe)
@@ -57,52 +57,77 @@ ensureFileExists path = do
   exists <- doesFileExist path
   unless exists $ writeFile path ""
 
-writeRelationsCsv :: FilePath -> [((Int, Int), Int)] -> IO ()
+writeRelationsCsv :: FilePath -> [([Int], Int)] -> IO ()
 writeRelationsCsv path relations = S.withFile path S.WriteMode $ \h -> do
-  let content = unlines $ map (\((e1, e2), p) -> show e1 ++ "," ++ show e2 ++ "," ++ show p) relations
+  let content = unlines $ map (\(entities, p) -> L.intercalate "," (map show entities ++ [show p])) relations
   S.hPutStr h content
 
-getTrainRelations :: Int -> Int -> [T.Text] -> IO ([((Int, Int), Int)], [((Int, Int), Int)])
+-- n項述語に対応するための関数
+getTrainRelations :: Int -> Int -> [T.Text] -> IO (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 getTrainRelations beam nbest posStr = do
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
 
-  -- 正解データと不正解データのgroupedPredsを別々に作成
+  -- 正解データのgroupedPredsを作成
   let (posEntities, posPreds, posGroupedPreds) = strToEntityPred beam nbest posStrIndexed
-      uniqueEntities = L.nub posEntities
-      uniquePreds = L.nub posPreds
-      entitiesIndex = zip (map show uniqueEntities ) [0..] :: [(String, Int)]
-      predsIndex = zip (map show uniquePreds) [0..] :: [(String, Int)]
-      entitiesMap = Map.fromList entitiesIndex
-      predsMap = Map.fromList predsIndex
+
+  -- エンティティの重複を取り除く
+  let uniqueEntities = L.nub posEntities
+      entitiesIndex = zip (map show uniqueEntities) [0..] :: [(String, Int)]
+      predsIndex = zip (map show posPreds) [0..] :: [(String, Int)]
+      entitiesMap = Map.fromList entitiesIndex :: Map.Map String Int
+      predsMap = Map.fromList predsIndex :: Map.Map String Int
+
+  -- putStrLn "~~entitiesMap~~"
+  -- print entitiesMap
+  -- putStrLn "~~predsMap~~"
+  -- print predsMap
+  -- putStrLn "~~posGroupedPreds~~"
+  -- print posGroupedPreds
 
   -- 辞書をCSVに書き出し
-  ensureFileExists (dataDir </> "entity_dict.csv")
-  ensureFileExists (dataDir </> "predicate_dict.csv")
   writeCsv (dataDir </> "entity_dict.csv") entitiesIndex
   writeCsv (dataDir </> "predicate_dict.csv") predsIndex
 
-  let binaryPosPreds = Map.findWithDefault [] 2 posGroupedPreds -- :: [UD.Preterm]
-      posRelations = [((entity1ID, entity2ID), predID) |
-                      pred <- binaryPosPreds, -- 2項述語を順に処理
-                      predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
-                      (arg1, arg2) <- extractArguments pred,
-                      entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
-                      entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
+  -- let binaryPosPreds = Map.findWithDefault [] 2 posGroupedPreds -- :: [UD.Preterm]
+  --     posRelations = [((entity1ID, entity2ID), predID) |
+  --                     pred <- binaryPosPreds, -- 2項述語を順に処理
+  --                     predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
+  --                     (arg1, arg2) <- extractArguments pred,
+  --                     entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
+  --                     entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
+
+  -- n項述語ごとに成り立つ述語を分ける
+  let posRelationsByArity = Map.mapWithKey (\arity preds -> 
+        [ (entityIDs, predID) |
+          pred <- preds, -- n項述語を順に処理
+          predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
+          let args = extractArguments pred,
+          let entityIDs = concatMap (\arg -> maybeToList (Map.lookup (show arg) entitiesMap)) args
+        ]
+        ) posGroupedPreds :: (Map.Map Int [([Int], Int)])
+
+  -- putStrLn "~~posRelationsByArity~~"
+  -- print posRelationsByArity
 
   -- ネガティブデータを作成
-  let allEntityPairs = [(e1, e2) | e1 <- Map.keys entitiesMap, e2 <- Map.keys entitiesMap, e1 /= e2]
-      allPreds = Map.keys predsMap
-      posRelationSet = Set.fromList posRelations
-  negRelations <- generateNegRelations posRelationSet allEntityPairs allPreds entitiesMap predsMap (length posRelations)
-  
-  writeRelationsCsv (dataDir </> "pos_relations.csv") posRelations
-  writeRelationsCsv (dataDir </> "neg_relations.csv") negRelations
+  negRelationsByArityList <- mapM (\(arity, posRelations) -> do
+    let posRelationSet = Set.fromList posRelations
+        allEntityCombinations = sequence $ replicate arity (Map.keys entitiesMap)
+        allPreds = Map.keys predsMap
+    negRelations <- generateNegRelations posRelationSet allEntityCombinations allPreds entitiesMap predsMap (length posRelations)
+    return (arity, negRelations)
+    ) (Map.toList posRelationsByArity)
+  let negRelationsByArity = Map.fromList negRelationsByArityList
+
+  -- 成り立つ述語のファイルをn項ごとに分けて保存
+  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_relations_arity" ++ show arity ++ ".csv") posRelations) (Map.toList posRelationsByArity)
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_relations_arity" ++ show arity ++ ".csv") negRelations) (Map.toList negRelationsByArity)
 
   putStrLn "Entity Dictionary written to entity_dict.csv"
   putStrLn "Predicate Dictionary written to predicate_dict.csv"
-  return (posRelations, negRelations)
+  return (posRelationsByArity, negRelationsByArity)
 
-getTestRelations :: Int -> Int -> [T.Text] -> IO [((Int, Int), Int)]
+getTestRelations :: Int -> Int -> [T.Text] -> IO (Map.Map Int [([Int], Int)])
 getTestRelations beam nbest str = do
   -- CSVから辞書を読み込み
   entityDictList <- readCsv (dataDir </> "entity_dict.csv")
@@ -120,20 +145,18 @@ getTestRelations beam nbest str = do
   writeCsv (dataDir </> "entity_dict.csv") (Map.toList updatedEntityDict)
   writeCsv (dataDir </> "predicate_dict.csv") (Map.toList updatedPredDict)
 
-  let binaryPreds = Map.findWithDefault [] 2 groupedPreds -- :: [UD.Preterm]
-  putStrLn "~~binaryPreds~~"
-  print binaryPreds
-
-  let testRelations = [((entity1ID, entity2ID), predID) |
-                       pred <- binaryPreds, -- 2項述語を順に処理
-                       predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) updatedPredDict),
-                       (arg1, arg2) <- extractArguments pred,
-                       entity1ID <- maybeToList (Map.lookup (show arg1) updatedEntityDict),
-                       entity2ID <- maybeToList (Map.lookup (show arg2) updatedEntityDict)]
+  let testRelationsByArity = Map.mapWithKey (\arity preds ->
+        [ (map (\arg -> fromJust $ Map.lookup (show arg) updatedEntityDict) args, predID)
+        | pred <- preds,
+          predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) updatedPredDict),
+          let args = extractArguments pred,
+          all (\arg -> Map.member (show arg) updatedEntityDict) args
+        ]
+        ) groupedPreds :: Map.Map Int [([Int], Int)]
 
   putStrLn "~~testRelations~~"
-  print testRelations
-  return testRelations
+  print testRelationsByArity
+  return testRelationsByArity
 
 -- strToEntityPred :: Int -> Int -> [T.Text] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
 strToEntityPred :: Int -> Int -> [(T.Text, T.Text)] -> ([UD.Preterm], [UD.Preterm], Map.Map Int [UD.Preterm])
@@ -174,8 +197,8 @@ strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
 
   return (allEntities, sigPreds, groupedPreds)
 
-extractArguments :: UD.Preterm -> [(UD.Preterm, UD.Preterm)]
-extractArguments (UD.App (UD.App _ arg1) arg2) = [(arg1, arg2)] -- 2項述語の場合
+extractArguments :: UD.Preterm -> [UD.Preterm]
+extractArguments (UD.App f arg) = extractArguments f ++ [arg]
 extractArguments _ = []
 
 extractPredicateName :: UD.Preterm -> UD.Preterm
@@ -190,24 +213,23 @@ extractPredicateName preterm =
   -- trace ("extractPredicateName: Non-Con type encountered: " ++ show preterm) preterm
   preterm
 
-generateNegRelations :: Set.Set ((Int, Int), Int) -> [(String, String)] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> IO [((Int, Int), Int)]
-generateNegRelations posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations = do
-  negRelations <- generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations []
+generateNegRelations :: Set.Set ([Int], Int) -> [[String]] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> IO [([Int], Int)]
+generateNegRelations posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations = do
+  negRelations <- generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations []
   return (take numNegRelations negRelations)
 
-generateNegRelations' :: Set.Set ((Int, Int), Int) -> [(String, String)] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> [((Int, Int), Int)] -> IO [((Int, Int), Int)]
-generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations negRelations
+generateNegRelations' :: Set.Set ([Int], Int) -> [[String]] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> [([Int], Int)] -> IO [([Int], Int)]
+generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations negRelations
   | length negRelations >= numNegRelations = return negRelations
   | otherwise = do
-      (e1, e2) <- randomChoice allEntityPairs
+      entityCombination <- randomChoice allEntityCombinations
       pred <- randomChoice allPreds
-      let entity1ID = entitiesMap Map.! e1
-          entity2ID = entitiesMap Map.! e2
+      let entityIDs = map (entitiesMap Map.!) entityCombination
           predID = predsMap Map.! pred
-          negRelation = ((entity1ID, entity2ID), predID)
+          negRelation = (entityIDs, predID)
       if Set.member negRelation posRelationSet || elem negRelation negRelations
-        then generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations negRelations
-        else generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations (negRelation : negRelations)
+        then generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations negRelations
+        else generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations (negRelation : negRelations)
 
 randomChoice :: [a] -> IO a
 randomChoice xs = do
