@@ -7,8 +7,7 @@ module DTS.NeuralDTS.PreProcess (
   extractPredicateName,
 --   strToEntityPred,
   getTrainRelations,
-  getTestRelations,
-  testPreterm
+  getTestRelations
   ) where
 
 import qualified Data.Text.Lazy as T      --text
@@ -36,6 +35,7 @@ import DTS.Prover (choice)
 import Data.List (nub)
 import Data.Map (mapMaybe)
 import System.Directory (doesFileExist)
+import System.Random (randomRIO)
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
 
@@ -57,22 +57,21 @@ ensureFileExists path = do
   exists <- doesFileExist path
   unless exists $ writeFile path ""
 
-getTrainRelations :: Int -> Int -> [T.Text] -> [T.Text] -> IO ([((Int, Int), Int)], [((Int, Int), Int)])
-getTrainRelations beam nbest posStr negStr = do
+writeRelationsCsv :: FilePath -> [((Int, Int), Int)] -> IO ()
+writeRelationsCsv path relations = S.withFile path S.WriteMode $ \h -> do
+  let content = unlines $ map (\((e1, e2), p) -> show e1 ++ "," ++ show e2 ++ "," ++ show p) relations
+  S.hPutStr h content
+
+getTrainRelations :: Int -> Int -> [T.Text] -> IO ([((Int, Int), Int)], [((Int, Int), Int)])
+getTrainRelations beam nbest posStr = do
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
-      negStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] negStr
 
   -- 正解データと不正解データのgroupedPredsを別々に作成
-  let (posEntitiesIndex, posPredsIndex, posGroupedPreds) = strToEntityPred beam nbest posStrIndexed
-      (negEntitiesIndex, negPredsIndex, negGroupedPreds) = strToEntityPred beam nbest negStrIndexed
-
-  -- print posPredsIndex
-  -- print negPredsIndex
-
-  let combinedEntities = L.nubBy (\(a, _) (b, _) -> a == b) (posEntitiesIndex ++ negEntitiesIndex)
-      combinedPreds = L.nubBy (\(a, _) (b, _) -> a == b) (posPredsIndex ++ negPredsIndex)
-      entitiesIndex = zip (map (show . fst) combinedEntities) [0..] :: [(String, Int)]
-      predsIndex = zip (map (show . fst) combinedPreds) [0..] :: [(String, Int)]
+  let (posEntities, posPreds, posGroupedPreds) = strToEntityPred beam nbest posStrIndexed
+      uniqueEntities = L.nub posEntities
+      uniquePreds = L.nub posPreds
+      entitiesIndex = zip (map show uniqueEntities ) [0..] :: [(String, Int)]
+      predsIndex = zip (map show uniquePreds) [0..] :: [(String, Int)]
       entitiesMap = Map.fromList entitiesIndex
       predsMap = Map.fromList predsIndex
 
@@ -83,8 +82,6 @@ getTrainRelations beam nbest posStr negStr = do
   writeCsv (dataDir </> "predicate_dict.csv") predsIndex
 
   let binaryPosPreds = Map.findWithDefault [] 2 posGroupedPreds -- :: [UD.Preterm]
-      binaryNegPreds = Map.findWithDefault [] 2 negGroupedPreds -- :: [UD.Preterm]
-
       posRelations = [((entity1ID, entity2ID), predID) |
                       pred <- binaryPosPreds, -- 2項述語を順に処理
                       predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
@@ -92,12 +89,14 @@ getTrainRelations beam nbest posStr negStr = do
                       entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
                       entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
 
-      negRelations = [((entity1ID, entity2ID), predID) |
-                      pred <- binaryNegPreds, -- 2項述語を順に処理
-                      predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
-                      (arg1, arg2) <- extractArguments pred,
-                      entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
-                      entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
+  -- ネガティブデータを作成
+  let allEntityPairs = [(e1, e2) | e1 <- Map.keys entitiesMap, e2 <- Map.keys entitiesMap, e1 /= e2]
+      allPreds = Map.keys predsMap
+      posRelationSet = Set.fromList posRelations
+  negRelations <- generateNegRelations posRelationSet allEntityPairs allPreds entitiesMap predsMap (length posRelations)
+  
+  writeRelationsCsv (dataDir </> "pos_relations.csv") posRelations
+  writeRelationsCsv (dataDir </> "neg_relations.csv") negRelations
 
   putStrLn "Entity Dictionary written to entity_dict.csv"
   putStrLn "Predicate Dictionary written to predicate_dict.csv"
@@ -112,13 +111,12 @@ getTestRelations beam nbest str = do
       predDict = Map.fromList predDictList :: Map.Map String Int
 
   let strIndexed = zipWith (\i s -> (T.pack $ "TestS" ++ show i, s)) [1..] str
-      (entitiesIndex, predsIndex, groupedPreds) = strToEntityPred beam nbest strIndexed
+      (entities, preds, groupedPreds) = strToEntityPred beam nbest strIndexed
 
-  -- 辞書に見つからなかったエンティティや述語を追加
-  let entitiesIndexText = map (\(ent, idx) -> (T.pack (show ent), idx)) entitiesIndex
-      predsIndexText = map (\(pred, idx) -> (T.pack (show pred), idx)) predsIndex
-  let updatedEntityDict = foldl (\dict (ent, _) -> if Map.member (T.unpack ent) dict then dict else Map.insert (T.unpack ent) (Map.size dict) dict) entityDict entitiesIndexText
-      updatedPredDict = foldl (\dict (pred, _) -> if Map.member (T.unpack pred) dict then dict else Map.insert (T.unpack pred) (Map.size dict) dict) predDict predsIndexText
+  let entitiesIndexDict = zipWith (\ent idx -> (T.pack (show ent), idx)) entities [0..] :: [(T.Text, Int)]
+      predsIndexDict = zipWith (\pred idx -> (T.pack (show pred), idx)) preds [0..] :: [(T.Text, Int)]
+  let updatedEntityDict = foldl (\dict (ent, _) -> if Map.member (T.unpack ent) dict then dict else Map.insert (T.unpack ent) (Map.size dict) dict) entityDict entitiesIndexDict
+      updatedPredDict = foldl (\dict (pred, _) -> if Map.member (T.unpack pred) dict then dict else Map.insert (T.unpack pred) (Map.size dict) dict) predDict predsIndexDict
   writeCsv (dataDir </> "entity_dict.csv") (Map.toList updatedEntityDict)
   writeCsv (dataDir </> "predicate_dict.csv") (Map.toList updatedPredDict)
 
@@ -138,14 +136,14 @@ getTestRelations beam nbest str = do
   return testRelations
 
 -- strToEntityPred :: Int -> Int -> [T.Text] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
-strToEntityPred :: Int -> Int -> [(T.Text, T.Text)] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
+strToEntityPred :: Int -> Int -> [(T.Text, T.Text)] -> ([UD.Preterm], [UD.Preterm], Map.Map Int [UD.Preterm])
 strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
   -- S1, S2, ... と文に番号を振る
   -- let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str :: [(T.Text, T.Text)]
   -- putStrLn "~~numberedStr~~"
   -- putStrLn $ show numberedStr
   nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ CP.simpleParse beam s) numberedStr
-  
+
   let pairslist = map (map (\(num, node) -> (num, node, UD.betaReduce $ UD.sigmaElimination $ CP.sem node)) . take nbest) nodeslist
       chosenlist = choice pairslist
       nodeSRlist = map unzip3 chosenlist
@@ -154,7 +152,7 @@ strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
       sig = foldl L.union [] $ map CP.sig nds -- :: [(T.Text,Preterm)] (= UD.Signature)
 
   putStrLn $ "~~srs~~"
-  printList srs 
+  printList srs
 
   putStrLn $ "~~sig~~"
   printList sig
@@ -166,75 +164,15 @@ strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
       correctPreds = map extractTypePreterm predsJudges -- :: [[Preterm]]
 
   let (tmp1, others) = L.partition isEntity [((UD.Con x), y) | (x, y) <- sig]
-      allEntities = entities ++ [map fst tmp1]
+      allEntities = concat entities ++ map fst tmp1
       sigPreds = map fst others
-  
-  -- entitiesの辞書
-  let entitiesIndex = pretermsIndex allEntities :: [(UD.Preterm, Int)]
-  -- entityの総数
-  let entitiesNum = length entitiesIndex
-  putStrLn $ "~~entityの辞書~~ "
-  putStrLn $ (show entitiesIndex) ++ " " ++ (show entitiesNum) ++ "個"
-  -- id->entityのマップ
-  -- let entityMap = Map.fromList entitiesIndex
-  -- putStrLn $ "Entity Map: " ++ show entityMap
-
-  -- predsの辞書
-  let predsIndex = pretermsIndex [sigPreds]
-  -- predsの総数
-  let predsNum = length predsIndex
-  putStrLn $ "~~述語の辞書~~ "
-  putStrLn $ (show predsIndex) ++ " " ++ (show predsNum) ++ "個"
-  -- id->述語のマップ
-  -- let predsIdxMap = Maps.fromList predsIndex
-  -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
-  -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
 
    -- 成り立つpreds
-  putStrLn $ "~~成り立つ述語~~ "
+  putStrLn "~~成り立つ述語~~ "
   let groupedPreds = groupPredicatesByArity $ concat correctPreds :: Map.Map Int [UD.Preterm]
-  -- mapM_ (\(arity, preds) -> do
-  --       putStrLn $ show arity ++ "項述語:"
-  --       mapM_ (putStrLn . show) preds
-  --       putStrLn ""
-  --   ) $ Map.toList groupedPreds
-  putStrLn $ show $ Map.toList groupedPreds
+  print (Map.toList groupedPreds)
 
-  -- id->述語のマップ
-  -- let predsIdxMap = Map.fromList indexPreds
-  -- putStrLn $ "Predicate Map: " ++ show predsIdxMap
-  -- putStrLn $ show entitiesNum ++ "," ++ show predsNum
-
-  return (entitiesIndex, predsIndex, groupedPreds)
-
-lookupInList :: Eq a => a -> [(a, b)] -> Maybe b
-lookupInList key list =
-  case filter (\(k, _) -> k == key) list of
-    ((_, value) : _) -> Just value
-    []               -> Nothing
-
-lookupInListPartial :: (Eq a, Show a, Show b) => (a -> Bool) -> [(a, b)] -> Maybe b
-lookupInListPartial predicate list =
-  let filtered = filter (\(k, _) -> predicate k) list
-  in case filtered of
-    ((_, value) : _) -> 
-      Just value
-      -- trace ("lookupInListPartial: Match found -> " ++ show key ++ " -> " ++ show value) $ Just value
-    [] -> 
-      Nothing
-      -- trace ("lookupInListPartial: No match found") Nothing
-
-lookupInMapPartial :: (Ord k) => (k -> Bool) -> Map.Map k v -> Maybe v
-lookupInMapPartial f m = fmap snd . L.find (f . fst) $ Map.toList m
-
-isPrefixOfPreterm :: UD.Preterm -> UD.Preterm -> Bool
-isPrefixOfPreterm (UD.Con key) (UD.Con pred) =
-  let result = T.isPrefixOf key pred
-  -- in trace ("isPrefixOfPreterm: Comparing " ++ show key ++ " with " ++ show pred ++ " -> " ++ show result) 
-  in result
-isPrefixOfPreterm _ _ =
-  False
-  -- trace "isPrefixOfPreterm: Types do not match for comparison" False
+  return (allEntities, sigPreds, groupedPreds)
 
 extractArguments :: UD.Preterm -> [(UD.Preterm, UD.Preterm)]
 extractArguments (UD.App (UD.App _ arg1) arg2) = [(arg1, arg2)] -- 2項述語の場合
@@ -252,34 +190,29 @@ extractPredicateName preterm =
   -- trace ("extractPredicateName: Non-Con type encountered: " ++ show preterm) preterm
   preterm
 
-testPreterm :: IO()
-testPreterm = do
-  let predsIndex = [(UD.Con "走る/はしる/ガヲニ", 0), (UD.Con "歌/か;歌/うた", 1)]
-      binaryPreds = [UD.Con "歌/か;歌/うた(π1(S1),次郎/じろう)", UD.Con "存在しない述語"]
+generateNegRelations :: Set.Set ((Int, Int), Int) -> [(String, String)] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> IO [((Int, Int), Int)]
+generateNegRelations posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations = do
+  negRelations <- generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations []
+  return (take numNegRelations negRelations)
 
-  let simplifiedBinaryPreds = map extractPredicateName binaryPreds
-  putStrLn "Debug: Simplified binaryPreds"
-  putStrLn $ show simplifiedBinaryPreds
+generateNegRelations' :: Set.Set ((Int, Int), Int) -> [(String, String)] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> [((Int, Int), Int)] -> IO [((Int, Int), Int)]
+generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations negRelations
+  | length negRelations >= numNegRelations = return negRelations
+  | otherwise = do
+      (e1, e2) <- randomChoice allEntityPairs
+      pred <- randomChoice allPreds
+      let entity1ID = entitiesMap Map.! e1
+          entity2ID = entitiesMap Map.! e2
+          predID = predsMap Map.! pred
+          negRelation = ((entity1ID, entity2ID), predID)
+      if Set.member negRelation posRelationSet || elem negRelation negRelations
+        then generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations negRelations
+        else generateNegRelations' posRelationSet allEntityPairs allPreds entitiesMap predsMap numNegRelations (negRelation : negRelations)
 
-  mapM_ (\pred -> print $ lookupInListPartial (\key -> isPrefixOfPreterm pred key) predsIndex) simplifiedBinaryPreds
-
-indexPreterms :: [[UD.Preterm]] -> [(Int, UD.Preterm)]
-indexPreterms = snd . L.foldl' addIndexedGroup (0, [])
-  where
-    addIndexedGroup :: (Int, [(Int, UD.Preterm)]) -> [UD.Preterm] -> (Int, [(Int, UD.Preterm)])
-    addIndexedGroup (startIndex, acc) group = 
-      let indexed = zip [startIndex..] group
-          newIndex = startIndex + length group
-      in (newIndex, acc ++ indexed)
-
-pretermsIndex :: [[UD.Preterm]] -> [(UD.Preterm, Int)]
-pretermsIndex = snd . L.foldl' addIndexedGroup (0, [])
-  where
-    addIndexedGroup :: (Int, [(UD.Preterm, Int)]) -> [UD.Preterm] -> (Int, [(UD.Preterm, Int)])
-    addIndexedGroup (startIndex, acc) group = 
-      let indexed = [(term, index) | (index, term) <- zip [startIndex..] group]
-          newIndex = startIndex + length group
-      in (newIndex, acc ++ indexed)
+randomChoice :: [a] -> IO a
+randomChoice xs = do
+  idx <- randomRIO (0, length xs - 1)
+  return (xs !! idx)
 
 extractTermPreterm :: [Ty.UJudgement] -> [UD.Preterm]
 extractTermPreterm = map (\(Ty.UJudgement _ preterm _) -> preterm)
@@ -300,12 +233,12 @@ isEntity :: (UD.Preterm, UD.Preterm) -> Bool
 isEntity (_, (UD.Con cname)) = cname == "entity"
 isEntity _ = False
 
--- isPred :: (UD.Preterm, UD.Preterm) -> Bool
--- isPred (tm, ty) = 
---   trace ("tm : " ++ show tm ++ "ty : " ++ show ty) $
---   case ty of
---     UD.App f x -> True
---     _ -> False
+isPred :: (UD.Preterm, UD.Preterm) -> Bool
+isPred (tm, ty) = 
+  trace ("tm : " ++ show tm ++ "ty : " ++ show ty) $
+  case ty of
+    UD.App f x -> True
+    _ -> False
 
 containsFunctionType :: UD.Preterm -> Bool
 containsFunctionType term = case term of
@@ -315,7 +248,7 @@ containsFunctionType term = case term of
     _ -> False
 
 groupPredicatesByArity :: [UD.Preterm] -> Map.Map Int [UD.Preterm]
-groupPredicatesByArity predicates = 
+groupPredicatesByArity predicates =
     Map.fromListWith (++) $ groupSingle predicates
   where
     groupSingle preds = [(countArgs p, [p]) | p <- preds]
@@ -325,7 +258,7 @@ countArgs :: UD.Preterm -> Int
 countArgs term = countArgsFromString (show term)
 
 countArgsFromString :: String -> Int
-countArgsFromString s = 
+countArgsFromString s =
     let withoutOuterParens = T.pack $ init $ tail $ dropWhile (/= '(') s
         args = T.splitOn (T.pack ",") withoutOuterParens
     -- in trace ("Split args: " ++ show args) $

@@ -79,10 +79,15 @@ instance Classifier MLP where
 -- Training code
 --------------------------------------------------------------------------------
 
+batchSize :: Int
 batchSize = 2
-numIters = 20
+numIters :: Integer
+numIters = 10
+myDevice :: Device
 myDevice = Device CUDA 0
+mode :: RuntimeMode
 mode = Train
+lr :: LearningRate
 lr = 5e-2
 
 -- model :: MLP -> Tensor -> Tensor
