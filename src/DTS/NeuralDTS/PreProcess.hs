@@ -180,7 +180,8 @@ strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
   putStrLn $ "~~sig~~"
   printList sig
 
-  let judges = getJudgements [] [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]
+  let judgesList = map (\(num, sr) -> getJudgements [] [((UD.Con num), sr)]) srs -- :: [[([UJudgement], [UJudgement])]]
+      judges = concat judgesList -- :: [([UJudgement], [UJudgement])]
       entitiesJudges = map fst judges -- :: [[UJudgement]]
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
