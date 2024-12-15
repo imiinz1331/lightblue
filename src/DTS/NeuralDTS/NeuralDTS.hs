@@ -35,7 +35,6 @@ processAndTrain beam nbest posStr = do
   
   -- n項関係のモデルをトレーニング
   mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList posTrainRelations')
-  mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList negTrainRelations')
 
 processAndTest :: Int -> Int -> [T.Text] -> IO ()
 processAndTest beam nbest str = do
