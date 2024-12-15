@@ -24,29 +24,28 @@ inputsDir = "src/DTS/NeuralDTS/inputs"
 
 processAndTrain :: Int -> Int -> [T.Text] -> IO ()
 processAndTrain beam nbest posStr = do
-  (posTrainRelations, negTrainRelations) <- getTrainRelations beam nbest posStr -- :: [((Int, Int), Int)]
+  (posTrainRelations, negTrainRelations) <- getTrainRelations beam nbest posStr -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
   putStrLn "Training Relations:"
   print posTrainRelations
   print negTrainRelations
 
-  -- MLP モデルのトレーニング
   let modelName = "mlp-model"
-  let posTrainRelations' = addLabel posTrainRelations 1
-  let negTrainRelations' = addLabel negTrainRelations 0
-  trainModel modelName (posTrainRelations' ++ negTrainRelations')
+  let posTrainRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posTrainRelations
+  let negTrainRelations' = Map.map (map (\(xs, y) -> ((xs, y), 0.0))) negTrainRelations
+  
+  -- n項関係のモデルをトレーニング
+  mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList posTrainRelations')
+  mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList negTrainRelations')
 
 processAndTest :: Int -> Int -> [T.Text] -> IO ()
 processAndTest beam nbest str = do
-  testRelations <- getTestRelations beam nbest str
+  testRelationsByArity <- getTestRelations beam nbest str -- :: Map.Map Int [([Int], Int)]
   putStrLn "Test Relations:"
-  print testRelations
+  print testRelationsByArity
 
   -- MLP モデルのロードとテスト
   let modelName = "mlp-model"
-  testModel modelName testRelations
-
-addLabel :: [((Int, Int), Int)] -> Int -> [(((Int, Int), Int), Float)]
-addLabel dataList label = map (\x -> (x, fromIntegral label :: Float)) dataList
+  mapM_ (\(arity, relations) -> testModel modelName relations arity) (Map.toList testRelationsByArity)
 
 pretermsIndex :: Ord a => [a] -> [(a, Int)]
 pretermsIndex xs = zip (L.nub xs) [0..]
