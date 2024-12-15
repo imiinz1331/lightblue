@@ -22,9 +22,9 @@ import Data.Map (mapMaybe)
 
 inputsDir = "src/DTS/NeuralDTS/inputs"
 
-processAndTrain :: Int -> Int -> [T.Text] -> [T.Text] -> IO ()
-processAndTrain beam nbest posStr negStr = do
-  (posTrainRelations, negTrainRelations) <- getTrainRelations beam nbest posStr negStr -- :: [((Int, Int), Int)]
+processAndTrain :: Int -> Int -> [T.Text] -> IO ()
+processAndTrain beam nbest posStr = do
+  (posTrainRelations, negTrainRelations) <- getTrainRelations beam nbest posStr -- :: [((Int, Int), Int)]
   putStrLn "Training Relations:"
   print posTrainRelations
   print negTrainRelations
@@ -64,13 +64,12 @@ testProcessAndTrain = do
 
   -- CSVファイルを読み込む
   posStr <- readCsv (inputsDir ++ "/posStr.csv")
-  negStr <- readCsv (inputsDir ++ "/negStr.csv")
-
+  
   -- テストデータを定義
   let testStr = [T.pack "次郎が踊る"]
 
   -- トレーニングとテストを実行
-  processAndTrain beam nbest posStr negStr
+  processAndTrain beam nbest posStr
   processAndTest beam nbest testStr
 
 -- testProcessAndTrain :: IO()
