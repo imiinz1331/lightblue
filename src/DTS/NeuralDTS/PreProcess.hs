@@ -157,7 +157,7 @@ strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
   putStrLn $ "~~sig~~"
   printList sig
 
-  let judges = Ty.getJudgements [] [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]
+  let judges = getJudgements [] [((UD.Con x), y) | (x, _) <- srs, (_, y) <- srs] -- :: [([UJudgement], [UJudgement])]
       entitiesJudges = map fst judges -- :: [[UJudgement]]
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
@@ -240,13 +240,6 @@ isPred (tm, ty) =
     UD.App f x -> True
     _ -> False
 
-containsFunctionType :: UD.Preterm -> Bool
-containsFunctionType term = case term of
-    UD.Pi _ _ -> True
-    UD.Lam _ -> True
-    UD.App f x -> containsFunctionType f || containsFunctionType x
-    _ -> False
-
 groupPredicatesByArity :: [UD.Preterm] -> Map.Map Int [UD.Preterm]
 groupPredicatesByArity predicates =
     Map.fromListWith (++) $ groupSingle predicates
@@ -263,3 +256,40 @@ countArgsFromString s =
         args = T.splitOn (T.pack ",") withoutOuterParens
     -- in trace ("Split args: " ++ show args) $
     in length args
+
+-- termとtypeを受け取って([entity], [述語])のlistを得る
+getJudgements :: Ty.TUEnv -> [(UD.Preterm, UD.Preterm)] -> [([Ty.UJudgement], [Ty.UJudgement])]
+getJudgements env [] = []
+getJudgements env ((tm, ty):rest) =
+  let newPairs = loop env (tm, ty)
+      newJudgements = map (\(tm2, ty2) -> Ty.UJudgement env tm2 ty2) newPairs
+      (entities, others) = L.partition isEntity newJudgements
+      (preds, _) = L.partition isPred others
+  in  ((entities, preds) : getJudgements env rest)
+  where
+      -- isEntity (UJudgement _ _ (UD.Con cname)) = cname == "entity"
+      isEntity (Ty.UJudgement _ _ (UD.Con _)) = True
+      isEntity _ = False
+      isPred (Ty.UJudgement _ _ term) = 
+          case term of
+            UD.App f x ->
+                not (containsFunctionType f) && 
+                not (containsFunctionType x)
+            _ -> False
+
+containsFunctionType :: UD.Preterm -> Bool
+containsFunctionType term = case term of
+    UD.Pi _ _ -> True
+    UD.Lam _ -> True
+    UD.App f x -> containsFunctionType f || containsFunctionType x
+    _ -> False
+
+loop :: Ty.TUEnv -> (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
+loop env (tm, ty) = case ty of
+    UD.Sigma _ _ ->
+      let sigmaResult = sigmaE (tm, ty)
+      in concatMap (loop env) sigmaResult
+    _ -> [(tm, ty)]
+
+sigmaE :: (UD.Preterm, UD.Preterm) -> [(UD.Preterm, UD.Preterm)]
+sigmaE (m, (UD.Sigma a b)) = [((UD.Proj UD.Fst m), a), ((UD.Proj UD.Snd m), (UD.subst b (UD.Proj UD.Fst m) 0))]
