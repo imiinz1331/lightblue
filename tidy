@@ -1,2 +1,0 @@
-#!/bin/bash
-tidy --tab-size 2 --input-xml true --indent-cdata true -utf8 -indent -quiet -w 0

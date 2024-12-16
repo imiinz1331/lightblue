@@ -36,6 +36,7 @@ import Data.List (nub)
 import Data.Map (mapMaybe)
 import System.Directory (doesFileExist)
 import System.Random (randomRIO)
+import Control.Monad.RWS (MonadState(put))
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
 
@@ -65,6 +66,7 @@ writeRelationsCsv path relations = S.withFile path S.WriteMode $ \h -> do
 -- n項述語に対応するための関数
 getTrainRelations :: Int -> Int -> [T.Text] -> IO (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 getTrainRelations beam nbest posStr = do
+  putStrLn "~~getTrainRelations~~"
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
 
   -- 正解データのgroupedPredsを作成
@@ -77,24 +79,9 @@ getTrainRelations beam nbest posStr = do
       entitiesMap = Map.fromList entitiesIndex :: Map.Map String Int
       predsMap = Map.fromList predsIndex :: Map.Map String Int
 
-  -- putStrLn "~~entitiesMap~~"
-  -- print entitiesMap
-  -- putStrLn "~~predsMap~~"
-  -- print predsMap
-  -- putStrLn "~~posGroupedPreds~~"
-  -- print posGroupedPreds
-
   -- 辞書をCSVに書き出し
   writeCsv (dataDir </> "entity_dict.csv") entitiesIndex
   writeCsv (dataDir </> "predicate_dict.csv") predsIndex
-
-  -- let binaryPosPreds = Map.findWithDefault [] 2 posGroupedPreds -- :: [UD.Preterm]
-  --     posRelations = [((entity1ID, entity2ID), predID) |
-  --                     pred <- binaryPosPreds, -- 2項述語を順に処理
-  --                     predID <- maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
-  --                     (arg1, arg2) <- extractArguments pred,
-  --                     entity1ID <- maybeToList (Map.lookup (show arg1) entitiesMap),
-  --                     entity2ID <- maybeToList (Map.lookup (show arg2) entitiesMap)]
 
   -- n項述語ごとに成り立つ述語を分ける
   let posRelationsByArity = Map.mapWithKey (\arity preds -> 
@@ -105,9 +92,6 @@ getTrainRelations beam nbest posStr = do
           let entityIDs = concatMap (\arg -> maybeToList (Map.lookup (show arg) entitiesMap)) args
         ]
         ) posGroupedPreds :: (Map.Map Int [([Int], Int)])
-
-  -- putStrLn "~~posRelationsByArity~~"
-  -- print posRelationsByArity
 
   -- ネガティブデータを作成
   negRelationsByArityList <- mapM (\(arity, posRelations) -> do
@@ -129,6 +113,7 @@ getTrainRelations beam nbest posStr = do
 
 getTestRelations :: Int -> Int -> [T.Text] -> IO (Map.Map Int [([Int], Int)])
 getTestRelations beam nbest str = do
+  putStrLn "~~getTestRelations~~"
   -- CSVから辞書を読み込み
   entityDictList <- readCsv (dataDir </> "entity_dict.csv")
   predDictList <- readCsv (dataDir </> "predicate_dict.csv")
@@ -161,10 +146,7 @@ getTestRelations beam nbest str = do
 -- strToEntityPred :: Int -> Int -> [T.Text] -> ([(UD.Preterm, Int)], [(UD.Preterm, Int)], Map.Map Int [UD.Preterm])
 strToEntityPred :: Int -> Int -> [(T.Text, T.Text)] -> ([UD.Preterm], [UD.Preterm], Map.Map Int [UD.Preterm])
 strToEntityPred beam nbest numberedStr = unsafePerformIO $ do
-  -- S1, S2, ... と文に番号を振る
-  -- let numberedStr = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] str :: [(T.Text, T.Text)]
-  -- putStrLn "~~numberedStr~~"
-  -- putStrLn $ show numberedStr
+  putStrLn "~~strToEntityPred~~"
   nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ CP.simpleParse beam s) numberedStr
 
   let pairslist = map (map (\(num, node) -> (num, node, UD.betaReduce $ UD.sigmaElimination $ CP.sem node)) . take nbest) nodeslist
