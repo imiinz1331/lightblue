@@ -32,9 +32,10 @@ processAndTrain beam nbest posStr = do
   let modelName = "mlp-model"
   let posTrainRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posTrainRelations
   let negTrainRelations' = Map.map (map (\(xs, y) -> ((xs, y), 0.0))) negTrainRelations
+  let allTrainRelations = Map.unionWith (++) posTrainRelations' negTrainRelations'
   
   -- n項関係のモデルをトレーニング
-  mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList posTrainRelations')
+  mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList allTrainRelations)
 
 processAndTest :: Int -> Int -> [T.Text] -> IO ()
 processAndTest beam nbest str = do
@@ -61,7 +62,7 @@ testProcessAndTrain = do
       nbest = 1
 
   -- CSVファイルを読み込む
-  posStr <- readCsv (inputsDir ++ "/posStr.csv")
+  posStr <- readCsv (inputsDir ++ "/日本語WordNet.csv")
   
   -- テストデータを定義
   let testStr = [T.pack "次郎が踊る"]
@@ -69,31 +70,3 @@ testProcessAndTrain = do
   -- トレーニングとテストを実行
   processAndTrain beam nbest posStr
   processAndTest beam nbest testStr
-
--- testProcessAndTrain :: IO()
--- testProcessAndTrain = do
---   let beam = 1
---       nbest = 1
---       posStr = [ T.pack "太郎が走る"
---                , T.pack "太郎が踊る"
---                , T.pack "次郎が走る"
---                , T.pack "ジョンが吠える"
---                , T.pack "犬が走る"
---                , T.pack "猫が跳ぶ"
---                , T.pack "鳥が飛ぶ"
---                , T.pack "魚が泳ぐ"
---                , T.pack "車が走る"
---                ]
---       negStr = [ T.pack "ジョンが踊る"
---                , T.pack "太郎が吠える"
---                , T.pack "次郎が吠える"
---                , T.pack "花子が走る"
---                , T.pack "猫が泳ぐ"
---                , T.pack "鳥が跳ぶ"
---                , T.pack "魚が飛ぶ"
---                , T.pack "車が泳ぐ"
---                , T.pack "太郎が飛ぶ"
---                ]
---       testStr = [T.pack "次郎が踊る"]
---   processAndTrain beam nbest posStr negStr
---   processAndTest beam nbest testStr
