@@ -42,6 +42,7 @@ import qualified GHC.Generics as G    --base
 import qualified Data.Text.Lazy as T  --text
 import Data.Store (Store(..))         --store
 import Data.Store.TH (makeStore)      --store
+import Debug.Trace
 import Interface.Text                 --lightblue
 import Interface.TeX                  --lightblue
 import Interface.HTML                 --lightblue
@@ -537,7 +538,7 @@ toDTT preterm = case preterm of
   Asp _   -> Nothing
   Lamvec _  -> Nothing
   Appvec _ _ -> Nothing
-  Ann _ _ -> Nothing
+  Ann m _ -> toDTT m
 
 -- {- Judgment of UDTT in de Bruijn notation -}
 

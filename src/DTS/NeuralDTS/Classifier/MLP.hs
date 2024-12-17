@@ -77,9 +77,9 @@ instance Classifier MLP where
 --------------------------------------------------------------------------------
 
 batchSize :: Int
-batchSize = 32
+batchSize = 2
 numIters :: Integer
-numIters = 100
+numIters = 10
 myDevice :: Device
 myDevice = Device CUDA 0
 mode :: RuntimeMode
