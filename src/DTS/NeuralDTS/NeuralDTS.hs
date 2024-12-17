@@ -58,7 +58,7 @@ readCsv path = do
 testProcessAndTrain :: IO()
 testProcessAndTrain = do
   -- CSVファイルを読み込む
-  posStr <- readCsv (inputsDir ++ "/posStr.csv")
+  posStr <- readCsv (inputsDir ++ "/test.csv")
   
   -- テストデータを定義
   let testStr = [T.pack "次郎が踊る"]

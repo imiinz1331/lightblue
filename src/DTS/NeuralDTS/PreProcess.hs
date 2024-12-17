@@ -15,7 +15,7 @@ import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import qualified Data.Map as Map
-import qualified Data.Maybe (maybeToList, fromJust)
+import qualified Data.Maybe (fromJust, mapMaybe)
 import qualified Data.Set as Set
 import Debug.Trace
 import GHC.IO (unsafePerformIO)
@@ -83,18 +83,16 @@ getTrainRelations ps posStr = do
   putStrLn "Entity Dictionary written to entity_dict.csv"
   putStrLn "Predicate Dictionary written to predicate_dict.csv"
 
-  -- n項述語ごとに成り立つ述語を分ける
   let posRelationsByArity = Map.mapWithKey (\arity preds -> 
-        [ (entityIDs, predID) |
-          pred <- preds, -- n項述語を順に処理
-          predID <- Data.Maybe.maybeToList (Map.lookup (show (extractPredicateName pred)) predsMap),
-          let args = extractArguments pred,
-          let entityIDs = concatMap (\arg -> Data.Maybe.maybeToList (Map.lookup (show arg) entitiesMap)) args
-        ]
-        ) posGroupedPreds :: (Map.Map Int [([Int], Int)])
+            [ (entityIDs, predID) |
+              (pred, args) <- preds,
+              let predID = Data.Maybe.fromJust (Map.lookup (show (extractPredicateName pred)) predsMap),
+              let entityIDs = map (\arg -> Data.Maybe.fromJust (Map.lookup (show arg) entitiesMap)) args
+            ]
+        ) posGroupedPreds
 
-  putStrLn "~~posRelationsByArity~~"
-  print posRelationsByArity
+  -- putStrLn "~~posRelationsByArity~~"
+  -- print posRelationsByArity
 
   -- ネガティブデータを作成
   negRelationsByArityList <- mapM (\(arity, posRelations) -> do
@@ -106,8 +104,8 @@ getTrainRelations ps posStr = do
     ) (Map.toList posRelationsByArity)
   let negRelationsByArity = Map.fromList negRelationsByArityList
 
-  putStrLn "~~negRelationsByArity~~"
-  print negRelationsByArity
+  -- putStrLn "~~negRelationsByArity~~"
+  -- print negRelationsByArity
 
   -- 成り立つ述語のファイルをn項ごとに分けて保存
   mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_relations_arity" ++ show arity ++ ".csv") posRelations) (Map.toList posRelationsByArity)
@@ -137,20 +135,24 @@ getTestRelations ps str = do
   writeCsv (dataDir </> "entity_dict.csv") (Map.toList updatedEntityDict)
   writeCsv (dataDir </> "predicate_dict.csv") (Map.toList updatedPredDict)
 
-  let testRelationsByArity = Map.mapWithKey (\arity preds ->
-        [ (map (\arg -> Data.Maybe.fromJust $ Map.lookup (show arg) updatedEntityDict) args, predID)
-        | pred <- preds,
-          predID <- Data.Maybe.maybeToList (Map.lookup (show (extractPredicateName pred)) updatedPredDict),
-          let args = extractArguments pred,
-          all (\arg -> Map.member (show arg) updatedEntityDict) args
+  let testRelationsByArity = Map.mapWithKey (\arity preds -> 
+        [ (entityIDs, predID) |
+          (pred, args) <- preds,
+          trace ("pred: " ++ show pred ++ " args: " ++ show args) True,
+          let predName = show (extractPredicateName pred),
+          let predID = Data.Maybe.fromJust (trace ("Looking up predicate: " ++ predName ++ ", Result: " ++ show (Map.lookup predName updatedPredDict)) (Map.lookup predName updatedPredDict)),
+          let entityIDs = map (\arg -> 
+                let argName = show arg
+                in Data.Maybe.fromJust (trace ("Looking up entity: " ++ argName ++ ", Result: " ++ show (Map.lookup argName updatedEntityDict)) (Map.lookup argName updatedEntityDict))
+                ) args
         ]
-        ) groupedPreds :: Map.Map Int [([Int], Int)]
+        ) groupedPreds
 
-  putStrLn "~~testRelations~~"
-  print testRelationsByArity
+  -- putStrLn "~~testRelations~~"
+  -- print testRelationsByArity
   return testRelationsByArity
 
-strToEntityPred :: CP.ParseSetting -> [(T.Text, T.Text)] -> ([DTT.Preterm], [DTT.Preterm], Map.Map Int [DTT.Preterm])
+strToEntityPred :: CP.ParseSetting -> [(T.Text, T.Text)] -> ([DTT.Preterm], [DTT.Preterm], Map.Map Int [(DTT.Preterm, [DTT.Preterm])])
 strToEntityPred ps strIndexed = unsafePerformIO $ do
   putStrLn "~~strToEntityPred~~"
   nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ Partial.simpleParse ps s) strIndexed  -- :: [[(Int, CCG.Node)]]
@@ -158,60 +160,61 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
   -- print nodeslist
   -- DTTに変換
   let convertedNodes = map (map (\(num, node) -> (num, node, UDTT.toDTT $ CCG.sem node))) nodeslist :: [[(T.Text, CCG.Node, Maybe DTT.Preterm)]]
-  putStrLn "~~convertedNodes~~"
-  print convertedNodes
+  -- putStrLn "~~convertedNodes~~"
+  -- print convertedNodes
   -- 変換が失敗した場合のエラーハンドリング
-  let handleConversion (num, node, Nothing) = error $ "Conversion failed for node: " ++ show node
-      handleConversion (num, node, Just dtt) = (num, node, DTT.betaReduce $ DTT.sigmaElimination dtt)
+  let handleConversion (num, node, Nothing) = trace (show num ++ ": toDTT error") Nothing
+      handleConversion (num, node, Just dtt) = Just (num, node, DTT.betaReduce $ DTT.sigmaElimination dtt)
   -- let pairslist = map (map (\(num, node) -> (num, node, DTT.betaReduce $ DTT.sigmaElimination $ CCG.sem node)) . take 1) nodeslist;
   
-  let pairslist = map (map handleConversion . take 1) convertedNodes :: [[(T.Text, CCG.Node, DTT.Preterm)]]
-      chosenlist = choice pairslist
+  let pairslist = map (Data.Maybe.mapMaybe handleConversion . take 1) convertedNodes :: [[(T.Text, CCG.Node, DTT.Preterm)]]
+      nonEmptyPairsList = filter (not . null) pairslist
+      chosenlist = choice nonEmptyPairsList
       nodeSRlist = map unzip3 chosenlist
       nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, DTT.Preterm)]
       sig = foldl L.union [] $ map CP.sig nds
+  -- putStrLn "~~pairslist~~"
+  -- print pairslist
 
-  putStrLn "~~pairslist~~"
-  print pairslist
-
-  putStrLn "~~srs~~"
-  print srs
-  putStrLn "~~sig~~"
-  print sig
+  -- putStrLn "~~srs~~"
+  -- print srs
+  -- putStrLn "~~sig~~"
+  -- print sig
       
-  let judges = getJudgements sig [] [((DTT.Con x), y) | (x, _) <- srs, (_, y) <- srs]
-  putStrLn "~~judges~~"
-  print judges
+  let judges = concat $ map (\(num, sr) -> getJudgements sig [] [(DTT.Con num, sr)]) srs -- :: [[([DTT.Judgment], [DTT.Judgment])]]
+  
+  -- putStrLn "~~judges~~"
+  -- print judges
   let entitiesJudges = map fst judges -- :: [[UJudgement]]
       predsJudges = map snd judges -- :: [[UJudgement]]
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
       correctPreds = map extractTypePreterm predsJudges -- :: [[Preterm]]
 
+  let transformedPreds = map transformPreterm $ concat correctPreds :: [(DTT.Preterm, [DTT.Preterm])]
+
   let (tmp1, others) = L.partition isEntity [((DTT.Con x), y) | (x, y) <- sig]
       allEntities = concat entities ++ map fst tmp1
       sigPreds = map fst others
 
-  putStrLn "~~全エンティティ~~"
-  print allEntities
-  putStrLn "~~全述語~~"
-  print sigPreds
+  -- putStrLn "~~全エンティティ~~"
+  -- print allEntities
+  -- putStrLn "~~全述語~~"
+  -- print sigPreds
+  -- putStrLn "~~成り立つ述語~~ "
   -- print correctPreds
+  -- putStrLn "~~変換後述語~~"
+  -- print transformedPreds
 
    -- 成り立つpreds
   putStrLn "~~成り立つ述語~~ "
-  let groupedPreds = groupPredicatesByArity $ concat correctPreds :: Map.Map Int [DTT.Preterm]
+  let groupedPreds = groupPredicatesByArity transformedPreds
   print (Map.toList groupedPreds)
-
   return (allEntities, sigPreds, groupedPreds)
 
 choice :: [[a]] -> [[a]]
 choice [] = [[]]
 choice (a:as) = [x:xs | x <- a, xs <- choice as]
-
-extractArguments :: DTT.Preterm -> [DTT.Preterm]
-extractArguments (DTT.App f arg) = extractArguments f ++ [arg]
-extractArguments _ = []
 
 extractPredicateName :: DTT.Preterm -> DTT.Preterm
 extractPredicateName (DTT.Con name) =
@@ -253,16 +256,6 @@ extractTermPreterm = map (\(DTT.Judgment _ _ preterm _) -> preterm)
 extractTypePreterm :: [DTT.Judgment] -> [DTT.Preterm]
 extractTypePreterm = map (\(DTT.Judgment _ _ _ preterm) -> preterm)
 
-printList :: [(T.Text, DTT.Preterm)] -> IO ()
-printList [] = return ()
-printList ((text, preterm):xs) = do
-    T.putStr "Text: "
-    T.putStrLn text
-    putStr "Preterm: "
-    print preterm
-    printList xs
-    putStr ""
-
 isEntity :: (DTT.Preterm, DTT.Preterm) -> Bool
 isEntity (tm, ty) = 
   -- trace ("isEntity tm : " ++ show tm ++ " ty : " ++ show ty) $
@@ -277,22 +270,23 @@ isPred (tm, ty) =
     (DTT.App f x) -> True
     _ -> False
 
-groupPredicatesByArity :: [DTT.Preterm] -> Map.Map Int [DTT.Preterm]
+-- groupPredicatesByArity :: [(DTT.Preterm, [DTT.Preterm])] -> [(Int, (DTT.Preterm, [DTT.Preterm]))]
+groupPredicatesByArity :: [(DTT.Preterm, [DTT.Preterm])] -> Map.Map Int [(DTT.Preterm, [DTT.Preterm])]
 groupPredicatesByArity predicates =
-    Map.fromListWith (++) $ groupSingle predicates
-  where
-    groupSingle preds = [(countArgs p, [p]) | p <- preds]
+  Map.fromListWith (++) $ groupSingle predicates
+      where
+          groupSingle preds = [(length args, [(p, args)]) | (p, args) <- preds]
 
-countArgs :: DTT.Preterm -> Int
-countArgs term = trace ("Counting args for: " ++ show term) $ countArgsFromString (show term)
--- countArgs term = countArgsFromString (show term)
+transformPreterm :: DTT.Preterm -> (DTT.Preterm, [DTT.Preterm])
+transformPreterm term = case term of
+  DTT.App f x -> 
+    let (func, args) = collectArgs f [x]
+    in (func, args)
+  _ -> (term, [])
 
-countArgsFromString :: String -> Int
-countArgsFromString s =
-    let withoutOuterParens = T.pack $ init $ tail $ dropWhile (/= '(') s
-        args = T.splitOn (T.pack ",") withoutOuterParens
-    -- in trace ("Split args: " ++ show args) $
-    in length args
+collectArgs :: DTT.Preterm -> [DTT.Preterm] -> (DTT.Preterm, [DTT.Preterm])
+collectArgs (DTT.App f x) args = collectArgs f (x : args)
+collectArgs func args = (func, args)
 
 -- termとtypeを受け取って([entity], [述語])のlistを得る
 getJudgements :: DTT.Signature -> DTT.Context -> [(DTT.Preterm, DTT.Preterm)] -> [([DTT.Judgment], [DTT.Judgment])]
