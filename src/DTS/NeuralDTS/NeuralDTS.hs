@@ -64,7 +64,7 @@ testProcessAndTrain = do
   let testStr = [T.pack "次郎が踊る"]
 
   lr <- L.lexicalResourceBuilder Juman.KWJA
-  let ps = CP.ParseSetting jpOptions lr 32 1 1 1 True Nothing Nothing True False
+  let ps = CP.ParseSetting jpOptions lr 1 1 1 1 True Nothing Nothing True False
 
   -- トレーニングとテストを実行
   processAndTrain ps posStr
