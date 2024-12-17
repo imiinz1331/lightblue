@@ -227,7 +227,7 @@ testModel modelName testRelations arity = do
   putStrLn $ "Model loaded from models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
 
   case model of
-    Nothing -> putStrLn $ "Model not found: models/" ++ modelName ++ ".model"
+    Nothing -> putStrLn $ "Model not found: models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
     Just trained -> do
       -- テストデータの判定
       putStrLn "Testing relations:"
