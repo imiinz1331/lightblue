@@ -84,13 +84,16 @@ getTrainRelations ps posStr = do
   putStrLn "Predicate Dictionary written to predicate_dict.csv"
 
   let posRelationsByArity = Map.mapWithKey (\arity preds -> 
-            [ (entityIDs, predID) |
-              (pred, args) <- preds,
-              let predID = Data.Maybe.fromJust (Map.lookup (show (extractPredicateName pred)) predsMap),
-              let entityIDs = map (\arg -> Data.Maybe.fromJust (Map.lookup (show arg) entitiesMap)) args
-            ]
+        Data.Maybe.mapMaybe (\(pred, args) -> do
+          let predName = show (extractPredicateName pred)
+          predID <- Map.lookup predName predsMap
+          let entityIDs = Data.Maybe.mapMaybe (\arg -> 
+                let argName = show arg
+                in Map.lookup argName entitiesMap
+                ) args
+          return (entityIDs, predID)
+        ) preds
         ) posGroupedPreds
-
   -- putStrLn "~~posRelationsByArity~~"
   -- print posRelationsByArity
 
