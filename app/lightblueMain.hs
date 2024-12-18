@@ -34,6 +34,7 @@ import qualified DTS.QueryTypes as QT
 import qualified DTS.NaturalLanguageInference as NLI
 import qualified JSeM as JSeM                         --jsem
 import qualified ML.Exp.Classification.Bounded as NLP --nlp-tools
+import qualified DTS.NeuralDTS.NeuralDTS as NDTS       --neuralDTS
 
 data Options =
   -- Version
@@ -50,6 +51,7 @@ data Command =
   | Version
   | Stat
   | Test
+  | NeuralDTS
     deriving (Show, Eq)
 
 --commandReader :: String -> a -> String -> [(a,String)]
@@ -112,6 +114,9 @@ optionParser =
       <> command "test"
            (info (pure Test)
                  (progDesc "Execute the test code." ))
+      <> command "neuralDTS"
+         (info (pure NeuralDTS)
+               (progDesc "Process and train the model." ))
       -- <> command "infer"
       --      (info inferOptionParser
       --            (progDesc "Local options: [-p|--prover wani|null] [--nsample n] (The default values: -p wani --nsample 0)" ))
@@ -355,6 +360,7 @@ lightblueMain (Options commands style filepath morphaName beamW nParse nTypeChec
     -- --
     -- lightblueMainLocal Treebank contents = do
     --   I.treebankBuilder beamw $ T.lines contents
+    lightblueMainLocal NeuralDTS lr contents = NDTS.testProcessAndTrain
 
 -- |
 -- | lightblue --version
