@@ -54,8 +54,11 @@ searchProof' a b c d setting=
 searchProofWithIncrementalDepth :: A.SAEnv -> A.AEnv -> WB.AType -> WB.Depth -> WB.Setting -> Int -> M.Maybe Int-> WB.Result
 searchProofWithIncrementalDepth a b c d setting currentDepth maybeLim =
   let result = searchProof' a b c d setting{WB.maxdepth = currentDepth}
-  in D.trace ("d=" ++ (show currentDepth)) $ 
-       if (null (WB.trees result) && maybe True (currentDepth <) maybeLim)
+  -- in D.trace ("d=" ++ (show currentDepth)) $ 
+  --      if (null (WB.trees result) && maybe True (currentDepth <) maybeLim)
+  --        then searchProofWithIncrementalDepth a b c d setting (currentDepth+1) maybeLim 
+  --        else result
+  in if (null (WB.trees result) && maybe True (currentDepth <) maybeLim)
          then searchProofWithIncrementalDepth a b c d setting (currentDepth+1) maybeLim 
          else result
 
