@@ -1,0 +1,4 @@
+Adv1					《まだ：以前からの状態の継続：「まだ」の削除》		yes	"Adverb, -mada"	entailment		花子はまだ人気がある。	花子は人気がある。
+Adv2					《まだ：以前からの状態の継続：「まだ」の削除》		yes	"Adverb, -mada"	entailment		太郎はまだ強い。	太郎は強い。
+Adv3					《まだ：以前からの状態の継続：「まだ」の削除》		yes	"Adverb, -mada"	entailment		次郎はまだ現役だ。	次郎はまだ現役だ。
+Adv4					《まだ：以前からの状態の継続：「まだ」の削除》		yes	"Adverb, -mada"	entailment		まだ雨が降っている。	雨が降っている。

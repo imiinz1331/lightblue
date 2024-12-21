@@ -23,6 +23,7 @@ module DTS.NaturalLanguageInference (
   , printParseResult
   , trawlParseResult
   , takeNbest
+  , testParseWithTypeCheck
   ) where
 
 import Control.Monad (when,forM_,join)    --base
@@ -52,6 +53,10 @@ import qualified DTS.QueryTypes as QT          --lightblue
 import qualified DTS.TypeChecker as TY         --lightblue
 import qualified DTS.Prover.Wani.Prove as Wani --lightblue
 import qualified JSeM as JSeM                  --jsem
+import qualified Parser.Language.Japanese.Lexicon as L
+import qualified Parser.Language.Japanese.Juman.CallJuman as Juman
+import Parser.Language (jpOptions)
+import qualified Debug.Trace as D
 
 data InferenceSetting = InferenceSetting {
   beam :: Int     -- ^ beam width
@@ -130,6 +135,8 @@ parseWithTypeCheck ps prover signtr contxt (text:texts) =
     return $ ParseTreeAndFelicityChecks node signtr' tcQueryType $ do
                tcDiagram <- takeNbest (CP.nTypeCheck ps) $ (TY.typeCheck prover (CP.verbose ps) tcQueryType)
                                                            <|> (TY.typeCheck prover (CP.verbose ps) tcQueryKind)
+              --  liftIO $ putStrLn ("tcDiagram: " ++ show tcDiagram)
+              --  liftIO $ S.hFlush S.stdout
                let contxt' = (DTT.trm $ Tree.node tcDiagram):contxt
                return (tcDiagram, parseWithTypeCheck ps prover signtr' contxt' texts)
 
@@ -212,5 +219,36 @@ trawlParseResult (InferenceResults (QueryAndDiagrams _ resultPos) (QueryAndDiagr
                | otherwise -> JSeM.Unk
 trawlParseResult NoSentence = fromFoldable []
 
- 
+testParseWithTypeCheck :: IO ()
+testParseWithTypeCheck = do
+  let discourse = ["花子がゆっくり走る。", "花子が走る。"]
+  let sig = [ ("花子", DTT.Entity)  -- 花子はエンティティ
+          , ("歩く", DTT.Pi (DTT.Var 0) (DTT.Pi (DTT.Var 0) DTT.Type))  -- 歩くはエンティティからエンティティへの述語
+          , ("ゆっくり", DTT.Pi (DTT.Var 0) (DTT.Pi (DTT.Var 0) DTT.Type))  -- ゆっくりはエンティティからエンティティへの述語
+          , ("様態", DTT.Pi (DTT.Var 0) (DTT.Pi (DTT.Var 0) DTT.Type))  -- 様態はエンティティからエンティティへの述語
+          ]
+  let ctx = [ DTT.Pi (DTT.Var 0) (DTT.Pi (DTT.Var 0) DTT.Type)  -- 花子がゆっくり歩く
+          , DTT.Pi (DTT.Var 0) (DTT.Pi (DTT.Var 0) DTT.Type)  -- 花子が歩く
+          ]
+  lr <- L.lexicalResourceBuilder Juman.KWJA
+  let parseSetting = CP.ParseSetting jpOptions lr 3 3 3 3 True Nothing Nothing False False
+      prover = getProver Wani $ QT.ProofSearchSetting (Just 3) Nothing (Just QT.Classical)
+      result = parseWithTypeCheck parseSetting prover [("dummy",DTT.Entity)] [] (map T.pack discourse)
+      -- result = parseWithTypeCheck parseSetting prover sig ctx []
 
+  putStrLn "TestParseWithTypeCheck: Result"
+  let style = TEXT
+  printParseResult S.stdout style 1 False False "Test" result
+  putStrLn "trawlParseResult"
+  inferenceLabelList <- ListT.toList (trawlParseResult result)
+  print inferenceLabelList
+
+  -- デバッグメッセージを追加
+  -- case result of
+  --   NoSentence -> putStrLn "NoSentence"
+  --   InferenceResults (QueryAndDiagrams _ resultPos) (QueryAndDiagrams _ resultNeg) -> do
+  --     posList <- ListT.toList resultPos
+  --     negList <- ListT.toList resultNeg
+  --     putStrLn $ "resultPos: " ++ show posList
+  --     putStrLn $ "resultNeg: " ++ show negList
+  --   _ -> return ()

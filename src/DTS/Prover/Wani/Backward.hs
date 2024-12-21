@@ -87,6 +87,17 @@ deduce sig var arrowType depth setting
         B.resultDef{
           B.trees = [UDT.Tree QT.Var (A.AJudgment sig var (A.aType) (A.Conclusion DdB.Kind)) []],
           B.rStatus = B.mergeStatus (B.sStatus setting) B.statusDef{B.usedMaxDepth = depth}}
+      -- TODO
+      A.Conclusion (DdB.Var term) ->
+        if callNeuralClassifier (A.Conclusion (DdB.Var term))
+        then 
+          -- 成り立つ場合の処理: 証明を与える
+          B.resultDef{
+            B.trees = [UDT.Tree QT.Var (A.AJudgment sig var (A.aType) (A.Conclusion (DdB.Var term))) []],
+            B.rStatus = B.mergeStatus (B.sStatus setting) B.statusDef{B.usedMaxDepth = depth}}
+        else 
+          -- 成り立たない場合の処理: 推論失敗
+          B.resultDef{B.errMsg = "Neural classifier rejected the term", B.rStatus = B.sStatus setting}
       _ -> 
         let result' = foldl -- If certain conditions are met, the proof may be rounded up without moving on to the next proof search.
               (\rs f -> 
@@ -646,3 +657,10 @@ sigmaIntro' sig var aType depth setting =
         result = B.resultDef{B.rStatus = status, B.trees = trees}
     in B.debugLog (sig,var) (A.ArrowSigma' as b1) depth setting "sigmaIntro" result
   _ -> B.debugLog (sig,var) aType depth setting "sigmaIntroハズレ" B.resultDef{B.rStatus = B.sStatus setting}
+
+callNeuralClassifier :: B.ATerm -> Bool
+callNeuralClassifier term = 
+  -- ニューラル分類器を呼び出して、termが成り立つかどうかを判定する
+  -- ここでは仮の実装として常にTrueを返す
+  D.trace ("callNeuralClassifier called with term: " ++ show term) $
+  True

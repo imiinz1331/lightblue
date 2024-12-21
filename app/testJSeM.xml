@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE jsem-dataset SYSTEM "jsem.dtd">
+<?xml-stylesheet type="text/xsl" href="jsem.xsl"?>
+<jsem-dataset>
+  <problem answer="yes" inference_type="entailment" jsem_id="702"
+  language="jp" phenomena="verb, adverb">
+    <description></description>
+    <p idx="1">
+      <script>花子が楽しく歌う。</script>
+    </p>
+    <h>
+      <script>花子が歌う。</script>
+    </h>
+    <note></note>
+  </problem>
+</jsem-dataset>
