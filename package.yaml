@@ -49,6 +49,8 @@ dependencies:
   - serialise >= 0.2.4
   - list-t >= 1.0.0.0
   - store >= 0.7.14
+  - async
+  - random-shuffle
 
 library:
   source-dirs: src

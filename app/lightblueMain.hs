@@ -360,7 +360,8 @@ lightblueMain (Options commands style filepath morphaName beamW nParse nTypeChec
     -- --
     -- lightblueMainLocal Treebank contents = do
     --   I.treebankBuilder beamw $ T.lines contents
-    lightblueMainLocal NeuralDTS lr contents = NDTS.testProcessAndTrain
+    -- lightblueMainLocal NeuralDTS lr contents = NDTS.testProcessAndTrain
+    lightblueMainLocal NeuralDTS lr contents = NDTS.testNeuralDTS
 
 -- |
 -- | lightblue --version
