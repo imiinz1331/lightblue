@@ -113,9 +113,8 @@ saveModel :: FilePath -> MLP -> MLPSpec -> IO ()
 saveModel path model spec = do
   createDirectoryIfMissing True modelsDir
   saveParams model path
-  putStrLn $ "Model saved to: " ++ path
-  print "Saved Model Parameters:"
-  print model
+  -- print "Saved Model Parameters:"
+  -- print model
   B.encodeFile (path ++ "-spec") spec
 
 loadModel :: FilePath -> MLPSpec -> IO (Maybe MLP)
@@ -125,9 +124,8 @@ loadModel path spec = do
     then do
       initModel <- toDevice myDevice <$> sample spec
       loadParams initModel path
-      print "Loaded Model Parameters:"
-      print initModel
-      print "model loaded"
+      -- print "Loaded Model Parameters:"
+      -- print initModel
       return $ Just initModel
     else return Nothing
 
@@ -274,8 +272,8 @@ testModel modelName testRelations arity = do
                          let rTensor = toDevice myDevice $ asTensor ([fromIntegral p :: Int] :: [Int])
                          let output = classify trained Eval entityTensors rTensor
                          let confidence = asValue (fst (maxDim (Dim 1) RemoveDim output)) :: Float
-                         let threshold = 0.5
-                         let prediction = if confidence >= threshold then 1 else 0
+                         let confThreshold = 0.5
+                         let prediction = if confidence >= confThreshold then 1 else 0
                          putStrLn $ "Test: " ++ show entities ++ ", " ++ show p ++ " -> Prediction: " ++ show prediction ++ " label : " ++ show label ++ " with confidence " ++ show confidence
                          putStrLn $ "Output tensor: " ++ show output
                          putStrLn $ "Confidence: " ++ show confidence
