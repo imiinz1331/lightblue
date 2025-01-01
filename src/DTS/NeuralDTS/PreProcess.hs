@@ -10,19 +10,23 @@ module DTS.NeuralDTS.PreProcess (
   getTestRelations
   ) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, replicateM)
+import Control.Concurrent.Async (mapConcurrently)
+import Control.Exception (try, SomeException)
 import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import qualified Data.Map as Map
 import qualified Data.Maybe (fromJust, mapMaybe)
 import qualified Data.Set as Set
+import Data.List.Split (chunksOf)
 import Debug.Trace
 import GHC.IO (unsafePerformIO)
 import qualified System.IO as S
 import System.FilePath ((</>))
 import System.Directory (doesFileExist)
-import System.Random (randomRIO)
+import System.Random (randomRIO, newStdGen, randomRs)
+import System.Random.Shuffle (shuffle)
 
 import qualified Parser.CCG as CCG
 import qualified Parser.ChartParser as CP
@@ -35,11 +39,13 @@ import qualified DTS.UDTTdeBruijn as UDTT
 import Control.Monad.RWS (MonadState(put))
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
+indexNum = 7
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
   let content = unlines $ map (\(name, idx) -> L.intercalate "," [name, show idx]) dict
   S.hPutStr h content
+  S.hFlush S.stdout
 
 -- CSVから辞書を読み込む
 readCsv :: FilePath -> IO [(String, Int)]
@@ -62,26 +68,46 @@ writeRelationsCsv path relations = S.withFile path S.WriteMode $ \h -> do
 -- n項述語に対応するための関数
 getTrainRelations :: CP.ParseSetting -> [T.Text] -> IO (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 getTrainRelations ps posStr = do
-  putStrLn "~~getTrainRelations~~"
+  putStrLn $ "~~getTrainRelations~~"
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
 
   -- 正解データのgroupedPredsを作成
   -- let (posEntities, posPreds, posGroupedPreds) = strToEntityPred beam nbest posStrIndexed
   let (posEntities, posPreds, posGroupedPreds) = strToEntityPred ps posStrIndexed
 
+  -- posGroupedPredsに含まれているエンティティと述語をフィルタリング
+  let includedPreds = L.nub $ concatMap (map fst) (Map.elems posGroupedPreds)
+      includedEntities = L.nub $ concatMap (map snd) (Map.elems posGroupedPreds)
+
+  -- putStrLn $ "~~filtered~~"
+  -- print includedEntities
+  -- print includedPreds
+
+  -- posEntitiesとposPredsをフィルタリング
+  let filteredEntities = filter (`elem` concat includedEntities) posEntities
+      filteredPreds = filter (`elem` includedPreds) posPreds
+
   -- エンティティの重複を取り除く
-  let uniqueEntities = L.nub posEntities
+  let uniqueEntities = L.nub filteredEntities
       entitiesIndex = zip (map show uniqueEntities) [0..] :: [(String, Int)]
-      predsIndex = zip (map show posPreds) [0..] :: [(String, Int)]
+      predsIndex = zip (map show filteredPreds) [0..] :: [(String, Int)]
       entitiesMap = Map.fromList entitiesIndex :: Map.Map String Int
       predsMap = Map.fromList predsIndex :: Map.Map String Int
 
-  -- 辞書をCSVに書き出し
-  writeCsv (dataDir </> "entity_dict.csv") entitiesIndex
-  writeCsv (dataDir </> "predicate_dict.csv") predsIndex
+  -- -- エンティティの重複を取り除く
+  -- let uniqueEntities = L.nub posEntities
+  --     entitiesIndex = zip (map show uniqueEntities) [0..] :: [(String, Int)]
+  --     predsIndex = zip (map show posPreds) [0..] :: [(String, Int)]
+  --     entitiesMap = Map.fromList entitiesIndex :: Map.Map String Int
+  --     predsMap = Map.fromList predsIndex :: Map.Map String Int
 
-  putStrLn "Entity Dictionary written to entity_dict.csv"
-  putStrLn "Predicate Dictionary written to predicate_dict.csv"
+  -- 辞書をCSVに書き出し
+  writeCsv (dataDir </> "entity_dict" ++ show indexNum ++ ".csv") entitiesIndex
+  writeCsv (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv") predsIndex
+
+  putStrLn $ "Entity Dictionary written to entity_dict" ++ show indexNum ++ ".csv"
+  putStrLn $ "Predicate Dictionary written to predicate_dict" ++ show indexNum ++ ".csv"
+  S.hFlush S.stdout
 
   let posRelationsByArity = Map.mapWithKey (\arity preds -> 
         Data.Maybe.mapMaybe (\(pred, args) -> do
@@ -94,36 +120,36 @@ getTrainRelations ps posStr = do
           return (entityIDs, predID)
         ) preds
         ) posGroupedPreds
-  -- putStrLn "~~posRelationsByArity~~"
+  putStrLn $ "~~posRelationsByArity~~"
   -- print posRelationsByArity
+  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv") posRelations) (Map.toList posRelationsByArity)
+  putStrLn $ "Entity Dictionary written to pos_relations_arity" ++ "_" ++ show indexNum ++ ".csv"
+  S.hFlush S.stdout
 
   -- ネガティブデータを作成
   negRelationsByArityList <- mapM (\(arity, posRelations) -> do
     let posRelationSet = Set.fromList posRelations
-        allEntityCombinations = sequence $ replicate arity (Map.keys entitiesMap)
-        allPreds = Map.keys predsMap
-    negRelations <- generateNegRelations posRelationSet allEntityCombinations allPreds entitiesMap predsMap (length posRelations)
+        allPreds = Map.elems predsMap
+        numEntities = Map.size entitiesMap
+    negRelations <- generateNegRelations posRelationSet allPreds numEntities arity (length posRelations)
     return (arity, negRelations)
     ) (Map.toList posRelationsByArity)
   let negRelationsByArity = Map.fromList negRelationsByArityList
-
-  -- putStrLn "~~negRelationsByArity~~"
+  putStrLn $ "~~negRelationsByArity~~"
   -- print negRelationsByArity
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv") negRelations) (Map.toList negRelationsByArity)
 
-  -- 成り立つ述語のファイルをn項ごとに分けて保存
-  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_relations_arity" ++ show arity ++ ".csv") posRelations) (Map.toList posRelationsByArity)
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_relations_arity" ++ show arity ++ ".csv") negRelations) (Map.toList negRelationsByArity)
-
-  putStrLn "Entity Dictionary written to pos_relations_arity.csv"
-  putStrLn "Predicate Dictionary written to neg_relations_arity.csv"
+  putStrLn $ "Predicate Dictionary written to neg_relations_arity" ++ "_" ++ show indexNum ++ ".csv"
+  S.hFlush S.stdout
   return (posRelationsByArity, negRelationsByArity)
 
 getTestRelations :: CP.ParseSetting -> [T.Text] -> IO (Map.Map Int [([Int], Int)])
 getTestRelations ps str = do
-  putStrLn "~~getTestRelations~~"
+  putStrLn $ "~~getTestRelations~~"
+  S.hFlush S.stdout
   -- CSVから辞書を読み込み
-  entityDictList <- readCsv (dataDir </> "entity_dict.csv")
-  predDictList <- readCsv (dataDir </> "predicate_dict.csv")
+  entityDictList <- readCsv (dataDir </> "entity_dict" ++ show indexNum ++ ".csv")
+  predDictList <- readCsv (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv")
   let entityDict = Map.fromList entityDictList
       predDict = Map.fromList predDictList :: Map.Map String Int
 
@@ -135,8 +161,9 @@ getTestRelations ps str = do
       predsIndexDict = zipWith (\pred idx -> (T.pack (show pred), idx)) preds [0..] :: [(T.Text, Int)]
   let updatedEntityDict = foldl (\dict (ent, _) -> if Map.member (T.unpack ent) dict then dict else Map.insert (T.unpack ent) (Map.size dict) dict) entityDict entitiesIndexDict
       updatedPredDict = foldl (\dict (pred, _) -> if Map.member (T.unpack pred) dict then dict else Map.insert (T.unpack pred) (Map.size dict) dict) predDict predsIndexDict
-  writeCsv (dataDir </> "entity_dict.csv") (Map.toList updatedEntityDict)
-  writeCsv (dataDir </> "predicate_dict.csv") (Map.toList updatedPredDict)
+  writeCsv (dataDir </> "entity_dict" ++ show indexNum ++ ".csv") (Map.toList updatedEntityDict)
+  writeCsv (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv") (Map.toList updatedPredDict)
+  S.hFlush S.stdout
 
   let testRelationsByArity = Map.mapWithKey (\arity preds -> 
         [ (entityIDs, predID) |
@@ -151,19 +178,37 @@ getTestRelations ps str = do
         ]
         ) groupedPreds
 
-  -- putStrLn "~~testRelations~~"
+  -- putStrLn $ "~~testRelations~~"
   -- print testRelationsByArity
   return testRelationsByArity
 
+processBatch :: CP.ParseSetting -> [(T.Text, T.Text)] -> IO [[(T.Text, CCG.Node)]]
+processBatch ps batch = do
+  results <- mapM (\(num, s) -> do
+                      result <- try (Partial.simpleParse ps s) :: IO (Either SomeException [CCG.Node])
+                      case result of
+                        Left ex -> do
+                          putStrLn $ "Error parsing sentence: " ++ T.unpack s
+                          putStrLn $ "Exception: " ++ show ex
+                          return []
+                        Right nodes -> return $ map (\n -> (num, n)) nodes
+                  ) batch
+  return results
+
 strToEntityPred :: CP.ParseSetting -> [(T.Text, T.Text)] -> ([DTT.Preterm], [DTT.Preterm], Map.Map Int [(DTT.Preterm, [DTT.Preterm])])
 strToEntityPred ps strIndexed = unsafePerformIO $ do
-  putStrLn "~~strToEntityPred~~"
-  nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ Partial.simpleParse ps s) strIndexed  -- :: [[(Int, CCG.Node)]]
-  -- putStrLn "~~nodeslist~~"
+  putStrLn $ "~~strToEntityPred~~"
+  S.hFlush S.stdout
+  -- nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ Partial.simpleParse ps s) strIndexed  -- :: [[(Int, CCG.Node)]]
+  -- バッチ処理を実行
+  let batchSize = 80
+  let batches = chunksOf batchSize strIndexed
+  nodeslist <- fmap concat $ mapConcurrently (processBatch ps) batches
+  -- putStrLn $ "~~nodeslist~~"
   -- print nodeslist
   -- DTTに変換
   let convertedNodes = map (map (\(num, node) -> (num, node, UDTT.toDTT $ CCG.sem node))) nodeslist :: [[(T.Text, CCG.Node, Maybe DTT.Preterm)]]
-  -- putStrLn "~~convertedNodes~~"
+  -- putStrLn $ "~~convertedNodes~~"
   -- print convertedNodes
   -- 変換が失敗した場合のエラーハンドリング
   let handleConversion (num, node, Nothing) = trace (show num ++ ": toDTT error") Nothing
@@ -177,17 +222,22 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
       nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, DTT.Preterm)]
       sig = foldl L.union [] $ map CP.sig nds
-  -- putStrLn "~~pairslist~~"
+  -- putStrLn $ "~~pairslist~~"
   -- print pairslist
 
-  -- putStrLn "~~srs~~"
+  -- putStrLn $ "~~srs~~"
   -- print srs
-  -- putStrLn "~~sig~~"
+  -- putStrLn $ "~~sig~~"
   -- print sig
+
+  -- 成功した文の数をカウント
+  let successCount = length $ filter (not . null) pairslist
+  putStrLn $ "Number of successful toDTT conversions: " ++ show successCount
+  S.hFlush S.stdout
       
   let judges = concat $ map (\(num, sr) -> getJudgements sig [] [(DTT.Con num, sr)]) srs -- :: [[([DTT.Judgment], [DTT.Judgment])]]
   
-  -- putStrLn "~~judges~~"
+  -- putStrLn $ "~~judges~~"
   -- print judges
   let entitiesJudges = map fst judges -- :: [[UJudgement]]
       predsJudges = map snd judges -- :: [[UJudgement]]
@@ -200,19 +250,20 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
       allEntities = concat entities ++ map fst tmp1
       sigPreds = map fst others
 
-  -- putStrLn "~~全エンティティ~~"
+  -- putStrLn $ "~~全エンティティ~~"
   -- print allEntities
-  -- putStrLn "~~全述語~~"
+  -- putStrLn $ "~~全述語~~"
   -- print sigPreds
-  -- putStrLn "~~成り立つ述語~~ "
+  -- putStrLn $ "~~成り立つ述語~~ "
   -- print correctPreds
-  -- putStrLn "~~変換後述語~~"
+  -- putStrLn $ "~~変換後述語~~"
   -- print transformedPreds
 
    -- 成り立つpreds
-  putStrLn "~~成り立つ述語~~ "
   let groupedPreds = groupPredicatesByArity transformedPreds
-  print (Map.toList groupedPreds)
+  -- putStrLn $ "~~成り立つ述語~~ "
+  -- print (Map.toList groupedPreds)
+  -- S.hFlush S.stdout
   return (allEntities, sigPreds, groupedPreds)
 
 choice :: [[a]] -> [[a]]
@@ -231,23 +282,18 @@ extractPredicateName preterm =
   -- trace ("extractPredicateName: Non-Con type encountered: " ++ show preterm) preterm
   preterm
 
-generateNegRelations :: Set.Set ([Int], Int) -> [[String]] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> IO [([Int], Int)]
-generateNegRelations posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations = do
-  negRelations <- generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations []
-  return (take numNegRelations negRelations)
-
-generateNegRelations' :: Set.Set ([Int], Int) -> [[String]] -> [String] -> Map.Map String Int -> Map.Map String Int -> Int -> [([Int], Int)] -> IO [([Int], Int)]
-generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations negRelations
-  | length negRelations >= numNegRelations = return negRelations
-  | otherwise = do
-      entityCombination <- randomChoice allEntityCombinations
-      pred <- randomChoice allPreds
-      let entityIDs = map (entitiesMap Map.!) entityCombination
-          predID = predsMap Map.! pred
-          negRelation = (entityIDs, predID)
-      if Set.member negRelation posRelationSet || elem negRelation negRelations
-        then generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations negRelations
-        else generateNegRelations' posRelationSet allEntityCombinations allPreds entitiesMap predsMap numNegRelations (negRelation : negRelations)
+-- TODO shuffle関数を使う
+generateNegRelations :: Set.Set ([Int], Int) -> [Int] -> Int -> Int -> Int -> IO [([Int], Int)]
+generateNegRelations posRelationSet allPreds numEntities arity numNegRelations = do
+  gen <- newStdGen
+  let generateSingleNegRelation = do
+        entityCombination <- replicateM arity (randomRIO (0, numEntities - 1))
+        pred <- randomRIO (0, length allPreds - 1)
+        let negRelation = (entityCombination, allPreds !! pred)
+        if Set.member negRelation posRelationSet
+          then generateSingleNegRelation
+          else return negRelation
+  mapM (const generateSingleNegRelation) [1..numNegRelations]
 
 randomChoice :: [a] -> IO a
 randomChoice xs = do
