@@ -92,7 +92,7 @@ myDevice = Device CUDA 0
 mode :: RuntimeMode
 mode = Train
 lr :: LearningRate
-lr = 5e-2
+lr = 1e-2
 
 getLineCount :: FilePath -> IO Int
 getLineCount path = do
@@ -109,7 +109,6 @@ calculateLoss model dataSet = do
   let relationIdxTensor = toDevice myDevice $ asTensor (relationIdxes :: [Int])
   let teachers = toDevice myDevice $ asTensor (label :: [Float]) :: Tensor
   let prediction = squeezeAll $ classify model mode relationIdxTensor entityIdxTensors
-  -- putStrLn $ "Prediction: " ++ show prediction
   return $ binaryCrossEntropyLoss' teachers prediction
 
 trainModel :: String -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO ()
