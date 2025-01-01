@@ -68,36 +68,24 @@ instance Randomizable MLPSpec MLP where
     <*> sample (LinearSpec hidden_dim2 output_feature)
 
 instance Classifier MLP where
-  classify :: MLP -> RuntimeMode -> [Tensor] -> Tensor -> Tensor
-  classify MLP {..} _ entitiesTensor predTensor =
-    let entities = map (embedding' (toDependent entity_emb)) entitiesTensor
-        relation = embedding' (toDependent relation_emb) predTensor
-        input = cat (Dim 1) (relation : entities)
+  classify :: MLP -> RuntimeMode -> Tensor -> [Tensor] -> Tensor
+  classify MLP {..} _ predTensor entitiesTensor =
+    let pred2 = embedding' (toDependent relation_emb) predTensor
+        entities = map (embedding' (toDependent entity_emb)) entitiesTensor
+        input = cat (Dim 1) (pred2 : entities)
+        -- input = cat (Dim 1) (entities ++ [relation])
         nonlinearity = Torch.sigmoid
     in nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
        $ linear linear_layer1 $ input
-  -- classify :: MLP -> RuntimeMode -> [Tensor] -> Tensor -> Tensor
-  -- classify MLP {..} _ entitiesTensor predTensor =
-  --   let entities = map (embedding' (toDependent entity_emb)) entitiesTensor
-  --       relation = embedding' (toDependent relation_emb) predTensor
-  --       input = cat (Dim 1) (relation : entities)
-  --       nonlinearity = Torch.sigmoid
-  --       -- デバッグログを出力
-  --       _ = unsafePerformIO $ do
-  --         putStrLn $ "Entities shape2: " ++ show (map shape entities)
-  --         putStrLn $ "Relation shape2: " ++ show (shape relation)
-  --         putStrLn $ "Input shape2: " ++ show (shape input)
-  --         S.hFlush S.stdout
-  --   in nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity $ linear linear_layer1 $ input
 
 --------------------------------------------------------------------------------
 -- Training code
 --------------------------------------------------------------------------------
 
 batchSize :: Int
-batchSize = 32
+batchSize = 256
 numIters :: Integer
-numIters = 100
+numIters = 500
 myDevice :: Device
 myDevice = Device CUDA 0
 -- myDevice = Device CPU 0
@@ -105,29 +93,6 @@ mode :: RuntimeMode
 mode = Train
 lr :: LearningRate
 lr = 5e-2
-
--- model :: MLP -> Tensor -> Tensor
--- model params t = mlp params t
-
-saveModel :: FilePath -> MLP -> MLPSpec -> IO ()
-saveModel path model spec = do
-  createDirectoryIfMissing True modelsDir
-  saveParams model path
-  -- print "Saved Model Parameters:"
-  -- print model
-  B.encodeFile (path ++ "-spec") spec
-
-loadModel :: FilePath -> MLPSpec -> IO (Maybe MLP)
-loadModel path spec = do
-  exists <- doesFileExist path
-  if exists
-    then do
-      initModel <- toDevice myDevice <$> sample spec
-      loadParams initModel path
-      -- print "Loaded Model Parameters:"
-      -- print initModel
-      return $ Just initModel
-    else return Nothing
 
 getLineCount :: FilePath -> IO Int
 getLineCount path = do
@@ -143,25 +108,17 @@ calculateLoss model dataSet = do
   let entityIdxTensors = map (toDevice myDevice . asTensor) (Data.List.transpose entityIdxesPadded)
   let relationIdxTensor = toDevice myDevice $ asTensor (relationIdxes :: [Int])
   let teachers = toDevice myDevice $ asTensor (label :: [Float]) :: Tensor
-  let prediction = squeezeAll $ classify model mode entityIdxTensors relationIdxTensor
+  let prediction = squeezeAll $ classify model mode relationIdxTensor entityIdxTensors
   -- putStrLn $ "Prediction: " ++ show prediction
   return $ binaryCrossEntropyLoss' teachers prediction
 
-trainModel :: String -> [(([Int], Int), Float)] -> Int -> IO ()
-trainModel modelName trainingRelations arity = do
+trainModel :: String -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO ()
+trainModel modelName trainData validData arity = do
   putStrLn $ "trainModel : " ++ show arity
   S.hFlush S.stdout
-  let (trainData, validData) = splitAt (round $ 0.8235 * fromIntegral (length trainingRelations)) trainingRelations
 
   entityCount <- getLineCount (dataDir </> "entity_dict" ++ show indexNum ++ ".csv")
   relationCount <- getLineCount (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv")
-
-  let checkIndexRange idx count = if idx < 0 || idx >= count then error $ "Index out of range: " ++ show idx ++ " (count: " ++ show count ++ ")" else idx
-  mapM_ (\((entities, relation), _) -> do
-          mapM_ (\e -> return $ checkIndexRange e entityCount) entities
-          return $ checkIndexRange relation relationCount
-        ) trainingRelations
-
   print $ "entityCount: " ++ show entityCount
   print $ "relationCount: " ++ show relationCount
   S.hFlush S.stdout
@@ -183,43 +140,36 @@ trainModel modelName trainingRelations arity = do
   when (null trainData && null validData) $ do
     error "Training data or labels are empty. Check your input data."
 
-  -- putStrLn $ "trainData shape: " ++ show (map (fst . fst) trainData)
-  -- putStrLn $ "validData shape: " ++ show (map (fst . fst) validData)
-
-  -- putStrLn $ "Entity embedding size: " ++ show (entity_num_embed spec)
-  -- putStrLn $ "Relation embedding size: " ++ show (relation_num_embed spec)
-
   -- 学習プロセス
   let batchedTrainSet = makeBatch batchSize trainData
   let batchedValidSet = makeBatch batchSize validData
   
   -- model
   initModel <- toDevice myDevice <$> sample spec
-  Torch.Train.saveParams initModel (modelsDir </> "init-model")
-  print $ "model loaded"
-
-  ((trained, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
+  
+  ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     -- putStrLn $ "epoch #" ++ show epoch
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
       \batch (model, opt) -> do
         -- loss
         loss <- calculateLoss model batch
-        updated <- runStep model optimizer loss lr
+        updated <- runStep model opt loss lr
         -- performGC
         return (updated, asValue loss::Float)
     -- batch の長さでlossをわる
     let batchloss = sum batchLosses / (fromIntegral (length batchLosses)::Float)
-    putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
-    S.hFlush S.stdout
     -- 検証データで評価
     validLosses <- mapM (calculateLoss batchModel) batchedValidSet
     let validLoss = sum validLosses / fromIntegral (length validLosses)
-    putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
-    S.hFlush S.stdout
+    when (epoch `mod` 100 == 0) $ do
+      putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+      putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
+      S.hFlush S.stdout
     return (batchTrained, (batchloss, asValue validLoss :: Float))
 
   -- モデルを保存
-  saveModel (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model") trained spec
+  Torch.Train.saveParams trainedModel (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model")
+  B.encodeFile (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model-spec") spec
   putStrLn $ "Model saved to models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
   S.hFlush S.stdout
 
@@ -227,7 +177,7 @@ trainModel modelName trainingRelations arity = do
   let (trainLosses, validLosses) = unzip losses
   drawLearningCurve (imagesDir </> modelName ++ "_learning-curve-training_" ++ show arity ++ ".png") "Learning Curve" [("", reverse trainLosses)]
   drawLearningCurve (imagesDir </> modelName ++ "_learning-curve-valid_" ++ show arity ++ ".png") "Learning Curve" [("", reverse validLosses)]
-  putStrLn $ "drawLearningCurve"
+  putStrLn "drawLearningCurve"
 
   where
     optimizer = GD
@@ -259,33 +209,26 @@ testModel modelName testRelations arity = do
         , arity = arity
         }
 
-  model <- loadModel (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model") spec
+  loadedModel <- Torch.Train.loadParams spec (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model")
   putStrLn $ "Model loaded from models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
 
-  case model of
-    Nothing -> putStrLn $ "Model not found: models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
-    Just trained -> do
-      -- テストデータの判定
-      putStrLn "Testing relations:"
-      results <- mapM (\((entities, p), label) -> do
-                         let entityTensors = map (\e -> toDevice myDevice $ asTensor ([fromIntegral e :: Int] :: [Int])) entities
-                         let rTensor = toDevice myDevice $ asTensor ([fromIntegral p :: Int] :: [Int])
-                         let output = classify trained Eval entityTensors rTensor
-                         let confidence = asValue (fst (maxDim (Dim 1) RemoveDim output)) :: Float
-                         let confThreshold = 0.5
-                         let prediction = if confidence >= confThreshold then 1 else 0
-                         putStrLn $ "Test: " ++ show entities ++ ", " ++ show p ++ " -> Prediction: " ++ show prediction ++ " label : " ++ show label ++ " with confidence " ++ show confidence
-                         putStrLn $ "Output tensor: " ++ show output
-                         putStrLn $ "Confidence: " ++ show confidence
-                         putStrLn $ "prediction: " ++ show prediction
-                         if prediction == 1
-                           then putStrLn "Relation holds."
-                           else putStrLn "Relation does not hold."
-                         return (label, fromIntegral prediction :: Float))
-                      testRelations
+  putStrLn "Testing relations:"
+  results <- mapM (\((entities, p), label) -> do
+                        let entityTensors = map (\e -> toDevice myDevice $ asTensor ([fromIntegral e :: Int] :: [Int])) entities
+                        let rTensor = toDevice myDevice $ asTensor ([fromIntegral p :: Int] :: [Int])
+                        let output = classify loadedModel Eval rTensor entityTensors
+                        let confidence = asValue (fst (maxDim (Dim 1) RemoveDim output)) :: Float
+                        let confThreshold = 0.5
+                        let prediction = if confidence >= confThreshold then 1 else 0
+                        putStrLn $ "Test: " ++ show entities ++ ", " ++ show p ++ " -> Prediction: " ++ show prediction ++ " label : " ++ show label ++ " with confidence " ++ show confidence
+                        if prediction == 1
+                          then putStrLn "Relation holds."
+                          else putStrLn "Relation does not hold."
+                        return (label, fromIntegral prediction :: Float))
+                    testRelations
 
-      -- 精度の計算
-      let correctPredictions = length $ filter (\(label, prediction) -> label == prediction) results
-      let totalPredictions = length results
-      let accuracy = (fromIntegral correctPredictions / fromIntegral totalPredictions) * 100 :: Double
-      putStrLn $ "Accuracy: " ++ show accuracy ++ "%"
+  -- 精度の計算
+  let correctPredictions = length $ filter (\(label, prediction) -> label == prediction) results
+  let totalPredictions = length results
+  let accuracy = (fromIntegral correctPredictions / fromIntegral totalPredictions) * 100 :: Double
+  putStrLn $ "Accuracy: " ++ show accuracy ++ "%"

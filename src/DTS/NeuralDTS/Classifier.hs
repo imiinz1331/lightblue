@@ -8,7 +8,7 @@ import Torch
 import Data.Binary
 
 class Classifier n where
-  classify :: n -> RuntimeMode -> [Tensor] -> Tensor -> Tensor
+  classify :: n -> RuntimeMode -> Tensor -> [Tensor] -> Tensor
 
 deriving instance Generic DeviceType
 deriving instance Binary DeviceType
