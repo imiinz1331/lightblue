@@ -1,3 +1,3 @@
 #!/bin/bash
 cd ${LIGHTBLUE}
-./lightblue neuralDTS > outputs/output.log 2>&1
+./lightblue neuralDTS > outputs/output17.log 2>&1
