@@ -79,10 +79,6 @@ getTrainRelations ps posStr = do
   let includedPreds = L.nub $ concatMap (map fst) (Map.elems posGroupedPreds)
       includedEntities = L.nub $ concatMap (map snd) (Map.elems posGroupedPreds)
 
-  -- putStrLn $ "~~filtered~~"
-  -- print includedEntities
-  -- print includedPreds
-
   -- posEntitiesとposPredsをフィルタリング
   let filteredEntities = filter (`elem` concat includedEntities) posEntities
       filteredPreds = filter (`elem` includedPreds) posPreds

@@ -132,7 +132,6 @@ checkAccuracy ps str = do
   let trainData = trainPosData ++ trainNegData
   let validData = validPosData ++ validNegData
   let testData = testPosData ++ testNegData
-  -- let testData = trainData
 
   genTrain <- newStdGen
   genValid <- newStdGen
@@ -176,8 +175,12 @@ readCsv path = do
 -- CSVファイルに書き込む関数
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path content = do
-  let textContent = map (\(k, v) -> T.unpack (T.pack (k ++ "," ++ show v))) content
-  S.writeFile path (unlines textContent)
+  if null content
+    then putStrLn $ "Error: No data to write to " ++ path
+    else do
+      let textContent = map (\(k, v) -> k ++ "," ++ show v) content
+      putStrLn $ "writeCsv: " ++ path
+      S.writeFile path (unlines textContent)
 
 parseRelations :: Int -> [T.Text] -> Map.Map Int [([Int], Int)]
 parseRelations arity lines =

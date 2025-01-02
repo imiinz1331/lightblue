@@ -92,7 +92,7 @@ myDevice = Device CUDA 0
 mode :: RuntimeMode
 mode = Train
 lr :: LearningRate
-lr = 1e-2
+lr = 5e-2
 
 getLineCount :: FilePath -> IO Int
 getLineCount path = do
