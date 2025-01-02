@@ -44,7 +44,7 @@ import qualified DTS.NaturalLanguageInference as NLI
 import qualified DTS.NeuralDTS.WordNet.WordNet as WN
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
-indexNum = 11
+indexNum = 12
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
@@ -70,6 +70,35 @@ writeRelationsCsv path relations = S.withFile path S.WriteMode $ \h -> do
   let content = unlines $ map (\(entities, p) -> L.intercalate "," (map show entities ++ [show p])) relations
   S.hPutStr h content
 
+getEntitiesPredsByArity :: ([DTT.Preterm], [DTT.Preterm], ([(DTT.Preterm, [DTT.Preterm])], [(DTT.Preterm, [DTT.Preterm])]))
+ -> (Map.Map String Int, Map.Map String Int)
+getEntitiesPredsByArity (posEntities, posPreds, (posOrgData, posAddData)) = do
+  let includedPreds1 = L.nub $ (map fst) posOrgData
+      includedPreds2 = L.nub $ (map fst) posAddData
+      includedEntities1 = L.nub $ (map snd) posOrgData
+      includedEntities2 = L.nub $ (map snd) posAddData
+      includedPreds = includedPreds1 ++ includedPreds2
+      includedEntities = includedEntities1 ++ includedEntities2
+      filteredEntities = filter (`elem` concat includedEntities) posEntities
+      filteredPreds = filter (`elem` includedPreds) posPreds
+      uniqueEntities = L.nub filteredEntities
+      uniquePreds = L.nub filteredPreds
+      entitiesIndex = zip (map show uniqueEntities) [0..] :: [(String, Int)]
+      predsIndex = zip (map show uniquePreds) [0..] :: [(String, Int)]
+      entitiesMap = Map.fromList entitiesIndex :: Map.Map String Int
+      predsMap = Map.fromList predsIndex :: Map.Map String Int
+  (entitiesMap, predsMap)
+
+writeEntityPredDict :: Int -> Map.Map String Int -> Map.Map String Int -> IO ()
+writeEntityPredDict arity entitiesMap predsMap = do
+  let entitiesIndex = Map.toList entitiesMap
+      predsIndex = Map.toList predsMap
+  writeCsv (dataDir </> "entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv") entitiesIndex
+  writeCsv (dataDir </> "predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv") predsIndex
+  putStrLn $ "Entity Dictionary written to entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv"
+  putStrLn $ "Predicate Dictionary written to predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv"
+  S.hFlush S.stdout
+
 -- n項述語に対応するための関数
 getTrainRelations :: CP.ParseSetting -> [T.Text] ->
   IO ((Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)]), (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)]))
@@ -77,95 +106,77 @@ getTrainRelations ps posStr = do
   putStrLn $ "~~getTrainRelations~~"
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
   let (posEntities, posPreds, (posOrgData, posAddData)) = strToEntityPred ps posStrIndexed
-
-  -- posGroupedPredsに含まれているエンティティと述語をフィルタリング
-  let includedPreds1 = L.nub $ concatMap (map fst) (Map.elems posOrgData)
-      includedPreds2 = L.nub $ concatMap (map fst) (Map.elems posAddData)
-      includedEntities1 = L.nub $ concatMap (map snd) (Map.elems posOrgData)
-      includedEntities2 = L.nub $ concatMap (map snd) (Map.elems posAddData)
-      includedPreds = includedPreds1 ++ includedPreds2
-      includedEntities = includedEntities1 ++ includedEntities2
-
-  -- posEntitiesとposPredsをフィルタリング
-  let filteredEntities = filter (`elem` concat includedEntities) posEntities
-      filteredPreds = filter (`elem` includedPreds) posPreds
-
-  -- -- フィルタリング前後の要素数を出力
-  putStrLn $ "Entities reduced: " ++ show (length posEntities) ++ "->" ++ show (length filteredEntities)
-  putStrLn $ "Preds reduced: " ++ show (length posPreds) ++ "->" ++ show (length filteredPreds)
-
-  -- エンティティの重複を取り除く
-  let uniqueEntities = L.nub filteredEntities
-      entitiesIndex = zip (map show uniqueEntities) [0..] :: [(String, Int)]
-      predsIndex = zip (map show filteredPreds) [0..] :: [(String, Int)]
-      entitiesMap = Map.fromList entitiesIndex :: Map.Map String Int
-      predsMap = Map.fromList predsIndex :: Map.Map String Int
-
-  -- 辞書をCSVに書き出し
-  writeCsv (dataDir </> "entity_dict" ++ show indexNum ++ ".csv") entitiesIndex
-  writeCsv (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv") predsIndex
-
-  putStrLn $ "Entity Dictionary written to entity_dict" ++ show indexNum ++ ".csv"
-  putStrLn $ "Predicate Dictionary written to predicate_dict" ++ show indexNum ++ ".csv"
-  S.hFlush S.stdout
+  
+  let result = map (\arity -> 
+                      let orgData = Map.findWithDefault [] arity posOrgData
+                          addData = Map.findWithDefault [] arity posAddData
+                          (entityMap, predMap) = getEntitiesPredsByArity (posEntities, posPreds, (orgData, addData))
+                      in (arity, (entityMap, predMap))
+                    ) (Map.keys posOrgData) -- :: [(Int, (Map String Int, Map String Int))]
+  mapM_ (\(arity, (entityMap, predMap)) -> writeEntityPredDict arity entityMap predMap) result
 
   let posOrgData' = Map.filterWithKey (\arity _ -> arity == 2) posOrgData
   let posAddData' = Map.filterWithKey (\arity _ -> arity == 2) posAddData
 
-  let posOrgRelationsByArity = Map.mapWithKey (\arity preds ->
-        Data.Maybe.mapMaybe (\(pred, args) -> do
-          let predName = show (extractPredicateName pred)
-          predID <- Map.lookup predName predsMap
-          let entityIDs = Data.Maybe.mapMaybe (\arg ->
-                let argName = show arg
-                in Map.lookup argName entitiesMap
-                ) args
-          return (entityIDs, predID)
-        ) preds
-        ) posOrgData'
-  let posAddRelationsByArity = Map.mapWithKey (\arity preds ->
-        Data.Maybe.mapMaybe (\(pred, args) -> do
-          let predName = show (extractPredicateName pred)
-          predID <- Map.lookup predName predsMap
-          let entityIDs = Data.Maybe.mapMaybe (\arg ->
-                let argName = show arg
-                in Map.lookup argName entitiesMap
-                ) args
-          return (entityIDs, predID)
-        ) preds
-        ) posAddData'
-  -- putStrLn $ "~~posRelationsByArity~~"
-  -- print posRelationsByArity
-  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_org_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  let posOrgRelationsByArity = Map.fromList $ map (\(arity, (entityMap, predMap)) ->
+        let orgData = Map.findWithDefault [] arity posOrgData'
+            relations = Data.Maybe.mapMaybe (\(pred, args) -> do
+              let predName = show (extractPredicateName pred)
+              predID <- Map.lookup predName predMap
+              let entityIDs = Data.Maybe.mapMaybe (\arg ->
+                    let argName = show arg
+                    in Map.lookup argName entityMap
+                    ) args
+              return (entityIDs, predID)
+              ) orgData
+        in (arity, relations)
+        ) result
+  let posAddRelationsByArity = Map.fromList $ map (\(arity, (entityMap, predMap)) ->
+        let addData = Map.findWithDefault [] arity posAddData'
+            relations = Data.Maybe.mapMaybe (\(pred, args) -> do
+              let predName = show (extractPredicateName pred)
+              predID <- Map.lookup predName predMap
+              let entityIDs = Data.Maybe.mapMaybe (\arg ->
+                    let argName = show arg
+                    in Map.lookup argName entityMap
+                    ) args
+              return (entityIDs, predID)
+              ) addData
+        in (arity, relations)
+        ) result
+  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
     posRelations) (Map.toList posOrgRelationsByArity)
-  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_add_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
     posRelations) (Map.toList posAddRelationsByArity)
-  putStrLn $ "posRelation written to pos_relations_arity" ++ "_" ++ show indexNum ++ ".csv"
+  putStrLn $ "posRelation written to pos_relations" ++ "_" ++ show indexNum ++ ".csv"
   S.hFlush S.stdout
 
   -- ネガティブデータを作成
   negOrgRelationsByArityList <- mapM (\(arity, posRelations) -> do
     let posRelationSet = Set.fromList posRelations
-        allPreds = Map.elems predsMap
-        numEntities = Map.size entitiesMap
+        allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
+        numEntities = Map.size (fst (Data.Maybe.fromJust (lookup arity result)))
     negRelations <- generateNegRelations posRelationSet allPreds numEntities arity (length posRelations)
     return (arity, negRelations)
     ) (Map.toList posOrgRelationsByArity)
   let negOrgRelationsByArity = Map.fromList negOrgRelationsByArityList
+
   negAddRelationsByArityList <- mapM (\(arity, posRelations) -> do
     let posRelationSet = Set.fromList posRelations
-        allPreds = Map.elems predsMap
-        numEntities = Map.size entitiesMap
+        allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
+        numEntities = Map.size (fst (Data.Maybe.fromJust (lookup arity result)))
     negRelations <- generateNegRelations posRelationSet allPreds numEntities arity (length posRelations)
     return (arity, negRelations)
     ) (Map.toList posAddRelationsByArity)
   let negAddRelationsByArity = Map.fromList negAddRelationsByArityList
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_org_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+
+  -- ネガティブデータをCSVファイルに書き込み
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
     negRelations) (Map.toList negOrgRelationsByArity)
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_add_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
     negRelations) (Map.toList negAddRelationsByArity)
 
-  putStrLn $ "negRelation written to neg_relations_arity" ++ "_" ++ show indexNum ++ ".csv"
+  putStrLn $ "negRelation written to neg_relations" ++ "_" ++ show indexNum ++ ".csv"
   S.hFlush S.stdout
   return ((posOrgRelationsByArity, posAddRelationsByArity), (negOrgRelationsByArity, negAddRelationsByArity))
 
@@ -188,7 +199,7 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
   putStrLn $ "~~strToEntityPred~~"
   S.hFlush S.stdout
   -- バッチ処理を実行
-  let batchSize = 10
+  let batchSize = 100
   let batches = chunksOf batchSize strIndexed
 
   nodeslist <- fmap concat $ mapConcurrently (processBatch ps) batches
@@ -255,10 +266,10 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
 
   putStrLn $ "~~Original Grouped Predicates Count by Arity~~"
   mapM_ (\(arity, preds) -> putStrLn $ "Arity " ++ show arity ++ ": " ++ show (length preds)) (Map.toList originalGroupedPreds)
+  -- mapM_ print (Map.toList originalGroupedPreds)
   putStrLn $ "~~Added Grouped Predicates Count by Arity~~"
-  mapM_ print (Map.toList originalGroupedPreds)
   mapM_ (\(arity, preds) -> putStrLn $ "Arity " ++ show arity ++ ": " ++ show (length preds)) (Map.toList addedGroupedPreds)
-  mapM_ print (Map.toList addedGroupedPreds)
+  -- mapM_ print (Map.toList addedGroupedPreds)
 
   return (allEntities, allPreds, (originalGroupedPreds, addedGroupedPreds))
 
@@ -266,7 +277,7 @@ augmentWithSynonyms :: Connection -> [(T.Text, DTT.Preterm)] -> IO (Map.Map T.Te
 augmentWithSynonyms conn sigs = do
   synonymMap <- fmap Map.fromList $ mapM (\(word, preterm) -> do
     synonyms <- WN.getSynonyms conn word -- :: [T.Text]
-    let augmented = take 5 $ map (\syn -> (syn, preterm)) synonyms
+    let augmented = take 3 $ map (\syn -> (syn, preterm)) synonyms
     return (word, augmented)) sigs
   return synonymMap
 
