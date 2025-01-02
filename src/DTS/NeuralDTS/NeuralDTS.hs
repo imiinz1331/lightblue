@@ -21,7 +21,7 @@ import System.Random (randomRIO, newStdGen, randomRs)
 import System.Random.Shuffle (shuffle, shuffle')
 import Debug.Trace
 
-import DTS.NeuralDTS.PreProcess (extractPredicateName, getTrainRelations, getTestRelations)
+import DTS.NeuralDTS.PreProcess (extractPredicateName, getTrainRelations)
 import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel)
 import qualified Parser.ChartParser as CP
 import Parser.Language (jpOptions) 
@@ -31,7 +31,7 @@ import Control.Monad.RWS (MonadState(put))
 
 inputsDir = "src/DTS/NeuralDTS/inputs"
 dataSetDir = "src/DTS/NeuralDTS/dataSet"
-indexNum = 7
+indexNum = 12
 
 -- processAndTrain :: CP.ParseSetting -> [T.Text] -> IO ()
 -- processAndTrain ps posStr = do
@@ -58,78 +58,77 @@ indexNum = 7
 --   let modelName = "mlp-model3"
 --   mapM_ (\(arity, relations) -> testModel modelName relations arity) (Map.toList testRelationsByArity)
 
-remapEntitiesAndPredicates :: Map.Map Int [([Int], Int)] -> (Map.Map Int Int, Map.Map Int Int, Map.Map Int [([Int], Int)])
-remapEntitiesAndPredicates posRelations = 
-  let usedEntities = Set.fromList [entity | (_, posRelations) <- Map.toList posRelations, (entities, _) <- posRelations, entity <- entities]
-      usedPredicates = Set.fromList [pred | (_, posRelations) <- Map.toList posRelations, (_, pred) <- posRelations]
-      entityList = Set.toList usedEntities
-      predicateList = Set.toList usedPredicates
-      newEntityMap = Map.fromList (zip entityList [0..])
-      newPredicateMap = Map.fromList (zip predicateList [0..])
-      remapEntity entity = Map.findWithDefault entity entity newEntityMap
-      remapPredicate pred = Map.findWithDefault pred pred newPredicateMap
-      remapRelation (entities, pred) = (map remapEntity entities, remapPredicate pred)
-      newPosRelations = Map.map (map remapRelation) posRelations
-  in (newEntityMap, newPredicateMap, newPosRelations)
-
 checkAccuracy :: CP.ParseSetting -> [T.Text] -> IO ()
 checkAccuracy ps str = do
-  -- (posRelations, negRelations) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
+  ((posOrgRelations, posAddRelations), (negOrgRelations, negAddRelations)) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
+
+  -- putStrLn "Training Relations:"
+  -- print posRelations
+  -- print negRelations
 
   -- ファイルから読み込み
-  let arities = [2]
-  posRelationsList <- forM arities $ \arity -> do
-    let filePath = dataSetDir </> ("new_pos_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-    csvLines <- readCsv filePath
-    return $ parseRelations arity csvLines
-  let posRelations = Map.unionsWith (++) posRelationsList
+  -- let arities = [2]
+  -- posOrgRelationsList <- forM arities $ \arity -> do
+  --   let filePath = dataSetDir </> ("pos_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  --   csvLines <- readCsv filePath
+  --   return $ parseRelations arity csvLines
+  -- let posOrgRelations = Map.unionsWith (++) posOrgRelationsList
+  
+  -- posAddRelationsList <- forM arities $ \arity -> do
+  --   let filePath = dataSetDir </> ("pos_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  --   csvLines <- readCsv filePath
+  --   return $ parseRelations arity csvLines
+  -- let posAddRelations = Map.unionsWith (++) posAddRelationsList
 
-  negRelationsList <- forM arities $ \arity -> do
-    let filePath = dataSetDir </> ("new_neg_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-    csvLines <- readCsv filePath
-    return $ parseRelations arity csvLines
-  let negRelations = Map.unionsWith (++) negRelationsList
+  -- negOrgRelationsList <- forM arities $ \arity -> do
+  --   let filePath = dataSetDir </> ("neg_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  --   csvLines <- readCsv filePath
+  --   return $ parseRelations arity csvLines
+  -- let negOrgRelations = Map.unionsWith (++) negOrgRelationsList
 
-  -- -- エンティティと述語をリマップ
-  -- forM arities $ \arity -> do
-  --   let arityPosRelations = Map.filterWithKey (\k _ -> k == arity) posRelations
-  --   let newPosRelationsList = concatMap (\(k, v) -> map (\(entities, pred) -> (show k ++ "," ++ show entities, pred)) v) (Map.toList arityPosRelations)
-  --   writeCsv (dataSetDir </> "new_pos_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv") newPosRelationsList
+  -- negAddRelationsList <- forM arities $ \arity -> do
+  --   let filePath = dataSetDir </> ("neg_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  --   csvLines <- readCsv filePath
+  --   return $ parseRelations arity csvLines
+  -- let negAddRelations = Map.unionsWith (++) negAddRelationsList
 
-  -- forM arities $ \arity -> do
-  --   let arityNegRelations = Map.filterWithKey (\k _ -> k == arity) posRelations
-  --   let newNegRelationsList = concatMap (\(k, v) -> map (\(entities, pred) -> (show k ++ "," ++ show entities, pred)) v) (Map.toList arityNegRelations)
-  --   writeCsv (dataSetDir </> "new_neg_relations_arity" ++ show arity ++ "_" ++ show indexNum ++ ".csv") newNegRelationsList
+  -- ラベルづけ
+  let posOrgRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posOrgRelations
+  let posAddRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posAddRelations
+  let negOrgRelations' = Map.map (map (\(xs, y) -> ((xs, y), 0.0))) negOrgRelations
+  let negAddRelations' = Map.map (map (\(xs, y) -> ((xs, y), 0.0))) negAddRelations
 
-  -- let newPosRelationsList = concatMap (\(k, v) -> map (\(entities, pred) -> (show k ++ "," ++ show entities, pred)) v) (Map.toList posRelations)
-  -- writeCsv (dataSetDir </> "new_pos_relations" ++ show indexNum ++ ".csv") newPosRelationsList
-  -- let newNegRelationsList = concatMap (\(k, v) -> map (\(entities, pred) -> (show k ++ "," ++ show entities, pred)) v) (Map.toList negRelations)
-  -- writeCsv (dataSetDir </> "new_neg_relations" ++ show indexNum ++ ".csv") newNegRelationsList
-
-  let posRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posRelations
-  let negRelations' = Map.map (map (\(xs, y) -> ((xs, y), 0.0))) negRelations
-
-  let posRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList posRelations') :: [(Int, (([Int], Int), Float))]
-  let negRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList negRelations') :: [(Int, (([Int], Int), Float))]
+  let posOrgRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList posOrgRelations') :: [(Int, (([Int], Int), Float))]
+  let posAddRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList posAddRelations') :: [(Int, (([Int], Int), Float))]
+  let negOrgRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList negOrgRelations') :: [(Int, (([Int], Int), Float))]
+  let negAddRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList negAddRelations') :: [(Int, (([Int], Int), Float))]
 
   genPos <- newStdGen
   genNeg <- newStdGen
-  let shuffledPosList = shuffle' posRelationsList2 (length posRelationsList2) genPos
-  let shuffledNegList = shuffle' negRelationsList2 (length negRelationsList2) genNeg
+  let shuffledOrgPosList = shuffle' posOrgRelationsList2 (length posOrgRelationsList2) genPos
+  let shuffledOrgNegList = shuffle' negOrgRelationsList2 (length negOrgRelationsList2) genNeg
 
   -- データを分割
-  let (trainPosData, restPosData) = splitAt (round $ 0.7 * fromIntegral (length shuffledPosList)) shuffledPosList
+  let (trainPosData, restPosData) = splitAt (round $ 0.5 * fromIntegral (length shuffledOrgPosList)) shuffledOrgPosList
   let (validPosData, testPosData) = splitAt (round $ 0.5 * fromIntegral (length restPosData)) restPosData
-  let (trainNegData, restNegData) = splitAt (round $ 0.7 * fromIntegral (length shuffledNegList)) shuffledNegList
+  let (trainNegData, restNegData) = splitAt (round $ 0.5 * fromIntegral (length shuffledOrgNegList)) shuffledOrgNegList
   let (validNegData, testNegData) = splitAt (round $ 0.5 * fromIntegral (length restNegData)) restNegData
-  writeCsv (dataSetDir </> "trainPosData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) trainPosData)
+  let trainAddPosData = trainPosData ++ posAddRelationsList2
+  let trainAddNegData = trainNegData ++ negAddRelationsList2
+
+  genPos' <- newStdGen
+  genNeg' <- newStdGen
+  let trainPosData' = shuffle' trainAddPosData (length trainAddPosData) genPos'
+  let trainNegData' = shuffle' trainAddNegData (length trainAddNegData) genNeg'
+
+  writeCsv (dataSetDir </> "trainPosData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) trainPosData')
   writeCsv (dataSetDir </> "validPosData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) validPosData)
   writeCsv (dataSetDir </> "testPosData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) testPosData)
-  writeCsv (dataSetDir </> "trainNegData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) trainNegData)
+  writeCsv (dataSetDir </> "trainNegData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) trainNegData')
   writeCsv (dataSetDir </> "validNegData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) validNegData)
   writeCsv (dataSetDir </> "testNegData.csv") (map (\(arity, ((entities, pred), _)) -> (show arity ++ "," ++ show entities, pred)) testNegData)
 
-  let trainData = trainPosData ++ trainNegData
+  let trainData = trainPosData' ++ trainNegData'
   let validData = validPosData ++ validNegData
   let testData = testPosData ++ testNegData
 
@@ -144,9 +143,9 @@ checkAccuracy ps str = do
   writeCsv (dataSetDir </> "validData.csv") (map (\(arity, ((entities, pred), label)) -> (show arity ++ "," ++ show label ++ ":" ++ show entities, pred)) shuffledValidData)
   writeCsv (dataSetDir </> "testData.csv") (map (\(arity, ((entities, pred), label)) -> (show arity ++ "," ++ show label ++ ":" ++ show entities, pred)) shuffledTestData)
 
-  putStrLn $ "Train Relations Count: " ++ show (length shuffledTrainData)
-  putStrLn $ "Valid Relations Count: " ++ show (length shuffledValidData)
-  putStrLn $ "Test Relations Count: " ++ show (length shuffledTestData)
+  putStrLn $ "Train Relations Count: " ++ show (length trainData)
+  putStrLn $ "Valid Relations Count: " ++ show (length validData)
+  putStrLn $ "Test Relations Count: " ++ show (length testData)
   S.hFlush S.stdout
 
   -- 分割したデータをMapに戻す
@@ -205,10 +204,12 @@ testProcessAndTrain = do
 testNeuralDTS :: IO()
 testNeuralDTS = do
   -- CSVファイルを読み込む
-  posStr <- readCsv (inputsDir ++ "/test2.csv")
+  -- posStr <- readCsv (inputsDir ++ "/posStr.csv")
+  posStr <- readCsv (inputsDir ++ "/JPWordNet.csv")
+  let posStr2 = take 1000 posStr
 
   lr <- L.lexicalResourceBuilder Juman.KWJA
   let ps = CP.ParseSetting jpOptions lr 1 1 1 1 True Nothing Nothing True False
 
   -- トレーニングとテストを実行
-  checkAccuracy ps posStr
+  checkAccuracy ps posStr2

@@ -277,7 +277,7 @@ augmentWithSynonyms :: Connection -> [(T.Text, DTT.Preterm)] -> IO (Map.Map T.Te
 augmentWithSynonyms conn sigs = do
   synonymMap <- fmap Map.fromList $ mapM (\(word, preterm) -> do
     synonyms <- WN.getSynonyms conn word -- :: [T.Text]
-    let augmented = take 3 $ map (\syn -> (syn, preterm)) synonyms
+    let augmented = take 5 $ map (\syn -> (syn, preterm)) synonyms
     return (word, augmented)) sigs
   return synonymMap
 
