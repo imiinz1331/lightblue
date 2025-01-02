@@ -10,10 +10,13 @@ module DTS.NeuralDTS.PreProcess (
   getTestRelations
   ) where
 
-import Control.Monad (unless, replicateM)
+import Control.Monad (unless, replicateM, (>=>))
+import Control.Monad.RWS (MonadState(put))
+-- import Control.Monad.ListT (runListT)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (try, SomeException)
 import qualified Data.Text.Lazy as T      --text
+import qualified ListT
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import qualified Data.Map as Map
@@ -32,14 +35,16 @@ import qualified Parser.CCG as CCG
 import qualified Parser.ChartParser as CP
 import qualified Parser.PartialParsing as Partial
 import qualified Parser.Language.Japanese.Templates as TP
+import qualified Interface as I
 import qualified Interface.HTML as HTML
 import qualified Interface.Text as T
 import qualified DTS.DTTdeBruijn as DTT
 import qualified DTS.UDTTdeBruijn as UDTT
-import Control.Monad.RWS (MonadState(put))
+import qualified DTS.QueryTypes as QT
+import qualified DTS.NaturalLanguageInference as NLI
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
-indexNum = 7
+indexNum = 10
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
@@ -72,7 +77,6 @@ getTrainRelations ps posStr = do
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
 
   -- 正解データのgroupedPredsを作成
-  -- let (posEntities, posPreds, posGroupedPreds) = strToEntityPred beam nbest posStrIndexed
   let (posEntities, posPreds, posGroupedPreds) = strToEntityPred ps posStrIndexed
 
   -- posGroupedPredsに含まれているエンティティと述語をフィルタリング
@@ -178,60 +182,68 @@ getTestRelations ps str = do
   -- print testRelationsByArity
   return testRelationsByArity
 
-processBatch :: CP.ParseSetting -> [(T.Text, T.Text)] -> IO [[(T.Text, CCG.Node)]]
-processBatch ps batch = do
+processBatch :: CP.ParseSetting -> QT.Prover -> DTT.Signature -> DTT.Context -> [(T.Text, T.Text)] -> IO [(T.Text, NLI.ParseResult)]
+processBatch ps prover signtr contxt batch = do
   results <- mapM (\(num, s) -> do
-                      result <- try (Partial.simpleParse ps s) :: IO (Either SomeException [CCG.Node])
-                      case result of
-                        Left ex -> do
-                          putStrLn $ "Error parsing sentence: " ++ T.unpack s
-                          putStrLn $ "Exception: " ++ show ex
-                          return []
-                        Right nodes -> return $ map (\n -> (num, n)) nodes
+                      let parseResult = NLI.parseWithTypeCheck ps prover signtr contxt (T.lines s)
+                      return (num, parseResult)
                   ) batch
   return results
+
+extractSignatureContextPreterm :: [(T.Text, NLI.ParseResult)] -> IO [(DTT.Signature, DTT.Context, (T.Text, DTT.Preterm))]
+extractSignatureContextPreterm results = fmap concat $ mapM extractFromResult results
+  where
+    extractFromResult :: (T.Text, NLI.ParseResult) -> IO [(DTT.Signature, DTT.Context, (T.Text, DTT.Preterm))]
+    extractFromResult (txt, NLI.InferenceResults (NLI.QueryAndDiagrams (DTT.ProofSearchQuery signature context preterm) _) _) = do
+      return [(signature, context, (txt, preterm))]
+    extractFromResult (txt, NLI.SentenceAndParseTrees _ parseTrees) = do
+      parseTreeResults <- ListT.toList parseTrees
+      results <- mapM (extractFromParseTree txt) parseTreeResults -- :: [[(Signature, Context, (Text, Preterm))]]
+      return $ concat results
+    extractFromResult (txt, NLI.NoSentence) = do
+      return []
+
+extractFromParseTree :: T.Text -> NLI.ParseTreeAndFelicityChecks -> IO [(DTT.Signature, DTT.Context, (T.Text, DTT.Preterm))]
+extractFromParseTree txt (NLI.ParseTreeAndFelicityChecks _ sig typeCheckQuery _) = do
+  let UDTT.Judgment signtr contxt term _ = typeCheckQuery
+  let convertedTerm = UDTT.toDTT term
+  case convertedTerm of
+    Just term -> return [(signtr, contxt, (txt, term))]
+    Nothing -> do
+      putStrLn $ "Conversion to DTT.Preterm failed for text: " ++ T.unpack txt
+      return []
 
 strToEntityPred :: CP.ParseSetting -> [(T.Text, T.Text)] -> ([DTT.Preterm], [DTT.Preterm], Map.Map Int [(DTT.Preterm, [DTT.Preterm])])
 strToEntityPred ps strIndexed = unsafePerformIO $ do
   putStrLn $ "~~strToEntityPred~~"
   S.hFlush S.stdout
-  -- nodeslist <- mapM (\(num, s) -> fmap (map (\n -> (num, n))) $ Partial.simpleParse ps s) strIndexed  -- :: [[(Int, CCG.Node)]]
   -- バッチ処理を実行
-  let batchSize = 80
+  let batchSize = 100
   let batches = chunksOf batchSize strIndexed
-  nodeslist <- fmap concat $ mapConcurrently (processBatch ps) batches
-  -- putStrLn $ "~~nodeslist~~"
-  -- print nodeslist
-  -- DTTに変換
-  let convertedNodes = map (map (\(num, node) -> (num, node, UDTT.toDTT $ CCG.sem node))) nodeslist :: [[(T.Text, CCG.Node, Maybe DTT.Preterm)]]
-  -- putStrLn $ "~~convertedNodes~~"
-  -- print convertedNodes
-  -- 変換が失敗した場合のエラーハンドリング
-  let handleConversion (num, node, Nothing) = trace (show num ++ ": toDTT error") Nothing
-      handleConversion (num, node, Just dtt) = Just (num, node, DTT.betaReduce $ DTT.sigmaElimination dtt)
-  -- let pairslist = map (map (\(num, node) -> (num, node, DTT.betaReduce $ DTT.sigmaElimination $ CCG.sem node)) . take 1) nodeslist;
-  
-  let pairslist = map (Data.Maybe.mapMaybe handleConversion . take 1) convertedNodes :: [[(T.Text, CCG.Node, DTT.Preterm)]]
-      nonEmptyPairsList = filter (not . null) pairslist
-      chosenlist = choice nonEmptyPairsList
-      nodeSRlist = map unzip3 chosenlist
-      nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
-      srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, DTT.Preterm)]
-      sig = foldl L.union [] $ map CP.sig nds
-  -- putStrLn $ "~~pairslist~~"
-  -- print pairslist
+  let prover = NLI.getProver NLI.Wani $ QT.ProofSearchSetting (Just 3) Nothing (Just QT.Intuitionistic)
+  results <- fmap concat $ mapConcurrently (processBatch ps prover [("dummy",DTT.Entity)] []) batches -- :: [(Text, ParseResult)]
+  -- putStrLn $ "~~results~~"
+  -- mapM_ (\(txt, result) -> NLI.printParseResult S.stdout I.TEXT 1 False False (T.unpack txt) result) results
 
-  -- putStrLn $ "~~srs~~"
-  -- print srs
+  sigCtxPreterm <- extractSignatureContextPreterm results
+  putStrLn $ "~~sigCtxPreterm~~"
+  let sig = concatMap (\(signature, _, _) -> signature) sigCtxPreterm :: [(T.Text, DTT.Preterm)]
+      ctx = map (\(_, context, _) -> context) sigCtxPreterm
+      preterm = map (\(_, _, preterm) -> preterm) sigCtxPreterm :: [(T.Text, DTT.Preterm)]
+
   -- putStrLn $ "~~sig~~"
   -- print sig
+  -- putStrLn $ "~~ctx~~"
+  -- print ctx
+  -- putStrLn $ "~~preterm~~"
+  -- print preterm
 
   -- 成功した文の数をカウント
-  let successCount = length $ filter (not . null) pairslist
+  let successCount = length $ filter (not . null) preterm
   putStrLn $ "Number of successful toDTT conversions: " ++ show successCount
   S.hFlush S.stdout
       
-  let judges = concat $ map (\(num, sr) -> getJudgements sig [] [(DTT.Con num, sr)]) srs -- :: [[([DTT.Judgment], [DTT.Judgment])]]
+  let judges = concat $ map (\(num, sr) -> getJudgements sig [] [(DTT.Con num, sr)]) preterm -- :: [[([DTT.Judgment], [DTT.Judgment])]]
   
   -- putStrLn $ "~~judges~~"
   -- print judges
