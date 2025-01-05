@@ -8,11 +8,12 @@
 module DTS.NeuralDTS.Classifier.MLP (
   trainModel,
   testModel
+  ,crossValidation
   ) where
 
 import Control.Monad (when)
 import Control.Monad.Cont (replicateM)
-import Data.List (foldl', intersperse, scanl', transpose)
+import Data.List (foldl', intersperse, scanl', transpose, unfoldr)
 import qualified Data.ByteString as B
 import qualified Data.Binary as B
 import GHC.Generics ( Generic )
@@ -21,19 +22,21 @@ import Torch
 import Torch.Control (mapAccumM, makeBatch)
 import qualified Torch.Train
 import System.Directory (createDirectoryIfMissing, doesFileExist)
-import System.Random (randomRIO)
+import System.Random (randomRIO, newStdGen)
 import System.FilePath ((</>))
 import System.Mem (performGC)
 import qualified System.IO as S
 import System.IO.Unsafe (unsafePerformIO)
 import System.IO (withFile, IOMode(..), hFileSize)
+import System.Random.Shuffle (shuffle')
 
 import DTS.NeuralDTS.Classifier
+import Control.Monad.RWS (MonadState(put))
 
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
-indexNum = 7
+indexNum = 12
 
 data MLPSpec = MLPSpec
   { 
@@ -111,13 +114,57 @@ calculateLoss model dataSet = do
   let prediction = squeezeAll $ classify model mode relationIdxTensor entityIdxTensors
   return $ binaryCrossEntropyLoss' teachers prediction
 
+-- 交差検証を行う関数
+crossValidation :: Int -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO Double
+crossValidation k dataSet addData testData arity = do
+  putStrLn $ "Cross Validation with " ++ show k ++ " folds"
+  S.hFlush S.stdout
+
+  -- データをシャッフル
+  gen <- newStdGen
+  let shuffledData = shuffle' dataSet (length dataSet) gen
+
+  -- データをk分割
+  let folds = splitIntoFolds k shuffledData
+
+  -- 各フォールドで訓練と検証を行う
+  accuracies <- mapM (\(i, fold) -> do
+        putStrLn $ "Starting fold " ++ show i
+        let (trainFolds, validFold) = splitAtFold i folds
+        putStrLn $ "Fold " ++ show i ++ ": Train size = " ++ show (length (concat trainFolds)) ++ ", Valid size = " ++ show (length validFold)
+        let trainData' = concat trainFolds ++ addData
+        let validData' = validFold
+        putStrLn $ "Fold " ++ show i ++ ": Train size = " ++ show (length trainData') ++ ", Valid size = " ++ show (length validData')
+        let modelName = "model_fold_" ++ show i
+        trainModel modelName trainData' validData' arity
+        accuracy <- testModel modelName testData arity
+        return accuracy
+        ) (zip [0..k-1] folds)
+
+  let averageAccuracy = sum accuracies / fromIntegral k
+  putStrLn $ "Cross Validation finished. Average accuracy: " ++ show averageAccuracy ++ "%"
+  return averageAccuracy
+
+-- データをk分割する関数
+splitIntoFolds :: Int -> [a] -> [[a]]
+splitIntoFolds k xs = let foldSize = length xs `Prelude.div` k
+                          remainder = length xs `mod` k
+                      in Prelude.take k $ unfoldr (\b -> if null b then Nothing else Just (splitAt (foldSize + if remainder > 0 then 1 else 0) b)) xs
+
+-- 指定したフォールドを検証データとして分割する関数
+splitAtFold :: Int -> [[a]] -> ([[a]], [a])
+splitAtFold i folds = let (before, after) = splitAt i folds
+                      in if null after
+                         then error "splitAtFold: after is empty"
+                         else (before ++ tail after, head after)
+
 trainModel :: String -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO ()
 trainModel modelName trainData validData arity = do
   putStrLn $ "trainModel : " ++ show arity
   S.hFlush S.stdout
 
-  entityCount <- getLineCount (dataDir </> "entity_dict" ++ show indexNum ++ ".csv")
-  relationCount <- getLineCount (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv")
+  entityCount <- getLineCount (dataDir </> "entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  relationCount <- getLineCount (dataDir </> "predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
   print $ "entityCount: " ++ show entityCount
   print $ "relationCount: " ++ show relationCount
   S.hFlush S.stdout
@@ -126,9 +173,9 @@ trainModel modelName trainData validData arity = do
   let spec = MLPSpec
         { entity_num_embed = entityCount  -- entityの埋め込み数
         , relation_num_embed = relationCount  -- 関係の埋め込み数
-        , entity_features = 128  -- entityの特徴量数
-        , relation_features = 64  -- 関係の特徴量数
-        , hidden_dim1 = 128  -- 最初の隠れ層の次元数
+        , entity_features = 256  -- entityの特徴量数
+        , relation_features = 256  -- 関係の特徴量数
+        , hidden_dim1 = 216  -- 最初の隠れ層の次元数
         , hidden_dim2 = 32  -- 2番目の隠れ層の次元数
         , output_feature = 1  -- 出力の特徴量数
         , arity = arity
@@ -160,10 +207,12 @@ trainModel modelName trainData validData arity = do
     -- 検証データで評価
     validLosses <- mapM (calculateLoss batchModel) batchedValidSet
     let validLoss = sum validLosses / fromIntegral (length validLosses)
-    when (epoch `mod` 100 == 0) $ do
-      putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
-      putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
-      S.hFlush S.stdout
+    putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+    putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
+    -- when (epoch `mod` 100 == 0) $ do
+    --   putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+    --   putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
+      -- S.hFlush S.stdout
     return (batchTrained, (batchloss, asValue validLoss :: Float))
 
   -- モデルを保存
@@ -180,29 +229,23 @@ trainModel modelName trainData validData arity = do
 
   where
     optimizer = GD
-
-    randSelect :: [a] -> Int -> IO [a]
-    randSelect xs n = do
-      indices <- replicateM n $ randomRIO (0, length xs - 1)
-      return [xs !! i | i <- indices]
-
     makeBatch :: Int -> [a] -> [[a]]
     makeBatch size xs = case splitAt size xs of
       ([], _) -> []
       (batch, rest) -> batch : makeBatch size rest
 
-testModel :: String -> [(([Int], Int), Float)] -> Int -> IO ()
+testModel :: String -> [(([Int], Int), Float)] -> Int -> IO Double
 testModel modelName testRelations arity = do
   putStrLn "testModel"
 
-  entityCount <- getLineCount (dataDir </> "entity_dict" ++ show indexNum ++ ".csv")
-  relationCount <- getLineCount (dataDir </> "predicate_dict" ++ show indexNum ++ ".csv")
+  entityCount <- getLineCount (dataDir </> "entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  relationCount <- getLineCount (dataDir </> "predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
   let spec = MLPSpec
         { entity_num_embed = entityCount  -- entityの埋め込み数
         , relation_num_embed = relationCount  -- 関係の埋め込み数
-        , entity_features = 128  -- entityの特徴量数
-        , relation_features = 64  -- 関係の特徴量数
-        , hidden_dim1 = 128  -- 最初の隠れ層の次元数
+        , entity_features = 256  -- entityの特徴量数
+        , relation_features = 256  -- 関係の特徴量数
+        , hidden_dim1 = 216  -- 最初の隠れ層の次元数
         , hidden_dim2 = 32  -- 2番目の隠れ層の次元数
         , output_feature = 1  -- 出力の特徴量数
         , arity = arity
@@ -231,3 +274,4 @@ testModel modelName testRelations arity = do
   let totalPredictions = length results
   let accuracy = (fromIntegral correctPredictions / fromIntegral totalPredictions) * 100 :: Double
   putStrLn $ "Accuracy: " ++ show accuracy ++ "%"
+  return accuracy

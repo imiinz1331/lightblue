@@ -21,8 +21,8 @@ import System.Random (randomRIO, newStdGen, randomRs)
 import System.Random.Shuffle (shuffle, shuffle')
 import Debug.Trace
 
-import DTS.NeuralDTS.PreProcess (extractPredicateName, getTrainRelations)
-import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel)
+import DTS.NeuralDTS.PreProcess (getTrainRelations)
+import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel, crossValidation)
 import qualified Parser.ChartParser as CP
 import Parser.Language (jpOptions) 
 import qualified Parser.Language.Japanese.Juman.CallJuman as Juman
@@ -33,64 +33,39 @@ inputsDir = "src/DTS/NeuralDTS/inputs"
 dataSetDir = "src/DTS/NeuralDTS/dataSet"
 indexNum = 12
 
--- processAndTrain :: CP.ParseSetting -> [T.Text] -> IO ()
--- processAndTrain ps posStr = do
---   (posTrainRelations, negTrainRelations) <- getTrainRelations ps posStr -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
---   putStrLn "Training Relations:"
---   -- print posTrainRelations
---   -- print negTrainRelations
-
---   let modelName = "mlp-model" ++ show indexNum
---   let posTrainRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posTrainRelations
---   let negTrainRelations' = Map.map (map (\(xs, y) -> ((xs, y), 0.0))) negTrainRelations
---   let allTrainRelations = Map.unionWith (++) posTrainRelations' negTrainRelations'
-  
---   -- n項関係のモデルをトレーニング
---   mapM_ (\(arity, relations) -> trainModel modelName relations arity) (Map.toList allTrainRelations)
-
--- processAndTest :: CP.ParseSetting -> [T.Text] -> IO ()
--- processAndTest ps str = do
---   testRelationsByArity <- getTestRelations ps str -- :: Map.Map Int [([Int], Int)]
---   putStrLn "Test Relations:"
---   print testRelationsByArity
-
---   -- MLP モデルのロードとテスト
---   let modelName = "mlp-model3"
---   mapM_ (\(arity, relations) -> testModel modelName relations arity) (Map.toList testRelationsByArity)
-
 checkAccuracy :: CP.ParseSetting -> [T.Text] -> IO ()
 checkAccuracy ps str = do
-  ((posOrgRelations, posAddRelations), (negOrgRelations, negAddRelations)) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
+  -- ((posOrgRelations, posAddRelations), (negOrgRelations, negAddRelations)) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 
   -- putStrLn "Training Relations:"
   -- print posRelations
   -- print negRelations
 
   -- ファイルから読み込み
-  -- let arities = [2]
-  -- posOrgRelationsList <- forM arities $ \arity -> do
-  --   let filePath = dataSetDir </> ("pos_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  --   csvLines <- readCsv filePath
-  --   return $ parseRelations arity csvLines
-  -- let posOrgRelations = Map.unionsWith (++) posOrgRelationsList
+  let arities = [2]
+  posOrgRelationsList <- forM arities $ \arity -> do
+    let filePath = dataSetDir </> ("pos_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+    csvLines <- readCsv filePath
+    return $ parseRelations arity csvLines
+  let posOrgRelations = Map.unionsWith (++) posOrgRelationsList
   
-  -- posAddRelationsList <- forM arities $ \arity -> do
-  --   let filePath = dataSetDir </> ("pos_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  --   csvLines <- readCsv filePath
-  --   return $ parseRelations arity csvLines
-  -- let posAddRelations = Map.unionsWith (++) posAddRelationsList
+  posAddRelationsList <- forM arities $ \arity -> do
+    let filePath = dataSetDir </> ("pos_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+    csvLines <- readCsv filePath
+    return $ parseRelations arity csvLines
+  let posAddRelations = Map.unionsWith (++) posAddRelationsList
 
-  -- negOrgRelationsList <- forM arities $ \arity -> do
-  --   let filePath = dataSetDir </> ("neg_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  --   csvLines <- readCsv filePath
-  --   return $ parseRelations arity csvLines
-  -- let negOrgRelations = Map.unionsWith (++) negOrgRelationsList
+  negOrgRelationsList <- forM arities $ \arity -> do
+    let filePath = dataSetDir </> ("neg_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+    csvLines <- readCsv filePath
+    return $ parseRelations arity csvLines
+  let negOrgRelations = Map.unionsWith (++) negOrgRelationsList
 
-  -- negAddRelationsList <- forM arities $ \arity -> do
-  --   let filePath = dataSetDir </> ("neg_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  --   csvLines <- readCsv filePath
-  --   return $ parseRelations arity csvLines
-  -- let negAddRelations = Map.unionsWith (++) negAddRelationsList
+  negAddRelationsList <- forM arities $ \arity -> do
+    let filePath = dataSetDir </> ("neg_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+    csvLines <- readCsv filePath
+    return $ parseRelations arity csvLines
+  let negAddRelations = Map.unionsWith (++) negAddRelationsList
 
   -- ラベルづけ
   let posOrgRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posOrgRelations
@@ -109,6 +84,7 @@ checkAccuracy ps str = do
   let shuffledOrgNegList = shuffle' negOrgRelationsList2 (length negOrgRelationsList2) genNeg
 
   -- データを分割
+  {-
   let (trainPosData, restPosData) = splitAt (round $ 0.5 * fromIntegral (length shuffledOrgPosList)) shuffledOrgPosList
   let (validPosData, testPosData) = splitAt (round $ 0.5 * fromIntegral (length restPosData)) restPosData
   let (trainNegData, restNegData) = splitAt (round $ 0.5 * fromIntegral (length shuffledOrgNegList)) shuffledOrgNegList
@@ -157,13 +133,46 @@ checkAccuracy ps str = do
   mapM_ (\arity -> do
            let trainDataForArity = Map.findWithDefault [] arity trainDataMap
            let validDataForArity = Map.findWithDefault [] arity validDataMap
-           trainModel modelName trainDataForArity validDataForArity arity
+           trainModel modelName trainValidDataForArity validDataForArity arity
         ) (Map.keys trainDataMap)
 
   mapM_ (\arity -> do
            let testDataForArity = Map.findWithDefault [] arity testDataMap
            testModel modelName testDataForArity arity
         ) (Map.keys testDataMap)
+        -}
+  
+  let (trainValidPosData, testPosData) = splitAt (round $ 0.8 * fromIntegral (length shuffledOrgPosList)) shuffledOrgPosList
+  let (trainValidNegData, testNegData) = splitAt (round $ 0.8 * fromIntegral (length shuffledOrgNegList)) shuffledOrgNegList
+  let trainValidData = trainValidPosData ++ trainValidNegData
+  let testData = testPosData ++ testNegData
+  let addData = posAddRelationsList2 ++ negAddRelationsList2
+
+  genTrainValid <- newStdGen
+  genAdd <- newStdGen
+  genTest <- newStdGen
+  let shuffledTrainValidData = shuffle' trainValidData (length trainValidData) genTrainValid
+  let shuffledAddData = shuffle' addData (length addData) genAdd
+  let shuffledTestData = shuffle' testData (length testData) genTest
+
+  putStrLn $ "TrainValid Relations Count: " ++ show (length trainValidData)
+  putStrLn $ "Test Relations Count: " ++ show (length testData)
+  S.hFlush S.stdout
+
+  let trainValidDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledTrainValidData]
+  let addDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledAddData]
+  let testDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledTestData]
+
+  mapM_ (\arity -> do
+           let trainValidDataForArity = Map.findWithDefault [] arity trainValidDataMap
+           let addDataForArity = Map.findWithDefault [] arity addDataMap
+           let testDataForArity = Map.findWithDefault [] arity testDataMap
+           averageAccuracy <- crossValidation 4 trainValidDataForArity addDataForArity testDataForArity arity
+           putStrLn $ "Average accuracy for arity " ++ show arity ++ ": " ++ show averageAccuracy ++ "%"
+          --  -- テストデータの評価
+          --  let testDataForArity = Map.findWithDefault [] arity testDataMap
+          --  mapM_ (\modelName -> testModel modelName testDataForArity arity) modelNames
+        ) (Map.keys trainValidDataMap)
 
 -- CSVファイルを読み込む関数
 readCsv :: FilePath -> IO [T.Text]
