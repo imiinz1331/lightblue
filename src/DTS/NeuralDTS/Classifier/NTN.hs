@@ -12,8 +12,8 @@ module DTS.NeuralDTS.Classifier.NTN (
 
 import Control.Monad (when, replicateM)
 import Data.Binary as B
-import Data.List (foldl', intersperse, scanl', transpose, unfoldr)
-import Debug.Trace
+import Data.List (transpose)
+import Debug.Trace as D
 import GHC.Generics
 import System.FilePath ((</>))
 import qualified System.IO as S
@@ -28,12 +28,11 @@ import Torch.Layer.Linear (LinearHypParams(..), LinearParams, linearLayer)
 import qualified Torch.Train
 
 import DTS.NeuralDTS.Classifier (Classifier(..))
-import DTS.NeuralDTS.Classifier.Utils as Utils ( getLineCount )
 
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
-indexNum = 12
+indexNum = 13
 
 data NTNSpec = NTNSpec
   { entity_num_embed :: Int,
@@ -48,51 +47,54 @@ data NTN = NTN
   { 
     entity_emb :: Parameter,
     relation_emb :: Parameter,
-    tensor_layers :: [Parameter],
-    linear_layers :: [LinearParams],
-    final_linear :: LinearParams,
+    tensor_layer1 :: Parameter,
+    tensor_layer2 :: Parameter,
+    tensor_layer3 :: Parameter,
+    linear_layer1 :: LinearParams,
+    linear_layer2 :: LinearParams,
+    linear_layer3 :: LinearParams,
+    linear_layer :: LinearParams,
     dropout_prob :: Double
   } deriving (Generic, Parameterized)
 
 instance Randomizable NTNSpec NTN where
-  sample NTNSpec {..} = do
-    tensors <- replicateM num_arguments $ makeIndependent =<< randnIO' [embedding_features, embedding_features, tensor_dim]
-    linears <- replicateM num_arguments $ sample (LinearHypParams myDevice True (embedding_features * 2) tensor_dim)
-    NTN
-      <$> (makeIndependent =<< randnIO' [entity_num_embed, embedding_features])
-      <*> (makeIndependent =<< randnIO' [relation_num_embed, embedding_features])
-      <*> pure tensors
-      <*> pure linears
-      <*> sample (LinearHypParams myDevice True tensor_dim 1)
-      <*> pure dropout_probability
+  sample NTNSpec {..} = NTN
+    <$> (makeIndependent =<< randnIO' [entity_num_embed, embedding_features])
+    <*> (makeIndependent =<< randnIO' [relation_num_embed, embedding_features])
+    <*> (makeIndependent =<< randnIO' [embedding_features, embedding_features, tensor_dim])
+    <*> (makeIndependent =<< randnIO' [embedding_features, embedding_features, tensor_dim])
+    <*> (makeIndependent =<< randnIO' [tensor_dim, tensor_dim, tensor_dim])
+    <*> sample (LinearHypParams myDevice True (embedding_features * 2) tensor_dim)
+    <*> sample (LinearHypParams myDevice True (embedding_features * 2) tensor_dim)
+    <*> sample (LinearHypParams myDevice True (tensor_dim * 2) tensor_dim)
+    <*> sample (LinearHypParams myDevice True tensor_dim 1)
+    <*> return dropout_probability
 
 instance Classifier NTN where
   classify :: NTN -> RuntimeMode -> Tensor -> [Tensor] -> Tensor
-  classify NTN {..} mode relation_idx entity_idxes =
-    let entities = map (\idx -> embedding' (toDependent entity_emb) idx) entity_idxes
-        relation = embedding' (toDependent relation_emb) relation_idx
-        tensor_results = zipWith (tensorLinear relation) entities (zip linear_layers tensor_layers)
-        aggregated_result = foldl1 (+) tensor_results
-        -- output = Torch.sigmoid $ linearLayer final_linear $ Torch.tanh aggregated_result
-        dropped_out = unsafePerformIO . dropout dropout_prob (mode == Train) $ aggregated_result
-        output = Torch.sigmoid $ linearLayer final_linear $ Torch.tanh dropped_out
+  classify NTN {..} mode relation_idxes [entity1_idxes, entity2_idxes] =
+    let entity1 = embedding' (toDependent entity_emb) entity1_idxes
+        relation = embedding' (toDependent relation_emb) relation_idxes
+        entity2 = embedding' (toDependent entity_emb) entity2_idxes
+        r1 = Torch.tanh $ tensorLinear entity1 relation linear_layer1 tensor_layer1
+        r2 = Torch.tanh $ tensorLinear relation entity2 linear_layer2 tensor_layer2
+        u = Torch.tanh $ tensorLinear r1 r2 linear_layer3 tensor_layer3
+        -- output = Torch.sigmoid $ linearLayer linear_layer u
+        u_dropped = if mode == Train then unsafePerformIO $ dropout dropout_prob True u else u
+        output = Torch.sigmoid $ linearLayer linear_layer u_dropped
     in output
-
-tensorLinear :: Tensor -> Tensor -> (LinearParams, Parameter) -> Tensor
-tensorLinear relation entity (linear_layer, tensor_layer) =
-  let d = shape entity !! 1 -- Embedding size
-      batchSize = shape entity !! 0
-      -- entityベクトルとrekationベクトルの連結
-      entity_relation = cat (Dim 1) [entity, relation]
-      -- 線形変換
-      linear_product = linearLayer linear_layer entity_relation
-      -- テンソル変換
-      entity_tensor = mm entity (view [d, -1] (toDependent tensor_layer)) -- (batchSize, d) * (d, tensor_dim)
-      -- bmm用にtensor_productの次元を調整
-      entity_tensor_reshaped = view [batchSize, d, -1] entity_tensor
-      relation_reshaped = view [batchSize, -1, 1] relation -- (batchSize, tensor_dim, 1)
-      tensor_product = bmm entity_tensor_reshaped relation_reshaped -- (batchSize, tensor_dim, 1)
-      tensor_product_shaped = reshape [batchSize, shape tensor_product !! 1] tensor_product -- (batchSize, tensor_dim)
+    
+tensorLinear :: Tensor -> Tensor -> LinearParams -> Parameter -> Tensor
+tensorLinear o1 o2 linear_layer tensor_layer = 
+  let batchSize2 = shape o1 !! 0
+      d = shape o1 !! 1
+      o1_o2 = cat (Dim 1) [o1, o2]
+      linear_product = linearLayer linear_layer o1_o2
+      o1_tensor = mm o1 (view [d, -1] (toDependent tensor_layer))
+      -- |tensor_product| = (batch_size, tensor_dim, 1)
+      tensor_product = bmm (view [batchSize2, -1, d] o1_tensor) (contiguous $ permute [0, 2, 1] $ unsqueeze (Dim 1) o2)
+      -- |tensor_product_shaped| = (batch_size, tensor_dim)
+      tensor_product_shaped = reshape [shape tensor_product !! 0, shape tensor_product !! 1] tensor_product
   in tensor_product_shaped + linear_product
 
 --------------------------------------------------------------------------------
@@ -102,13 +104,13 @@ tensorLinear relation entity (linear_layer, tensor_layer) =
 batchSize :: Int
 batchSize = 256
 numIters :: Integer
-numIters = 100
+numIters = 500
 myDevice :: Device
 myDevice = Device CUDA 0
 mode :: RuntimeMode
 mode = Train
 lr :: LearningRate
-lr = 5e-2
+lr = 5e-3
 
 calculateLoss :: (Classifier n) => n -> [(([Int], Int), Float)] -> IO Tensor
 calculateLoss model dataSet = do
@@ -144,8 +146,8 @@ trainModel modelName spec trainData arity = do
 
   -- model
   initModel <- toDevice myDevice <$> sample spec
---   let optimizer = GD
-  let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
+  let optimizer = GD
+--   let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
   
   ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 

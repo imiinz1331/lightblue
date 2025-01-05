@@ -36,7 +36,7 @@ inputsDir = "src/DTS/NeuralDTS/inputs"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 modelsDir = "src/DTS/NeuralDTS/models"
-indexNum = 12
+indexNum = 13
 
 checkAccuracy :: CP.ParseSetting -> [T.Text] -> IO ()
 checkAccuracy ps str = do
@@ -119,7 +119,7 @@ checkAccuracy ps str = do
           -- averageAccuracyMLP <- Utils.crossValidation 5 mlpSpec MLP.trainModel MLP.testModel orgDataForArity addDataForArity arity
           -- putStrLn $ "Average accuracy for MLP with arity " ++ show arity ++ ": " ++ show averageAccuracyMLP ++ "%"
           
-          -- NTNを使用する場合
+          -- NTNを使用する場合 (TODO : n=2の場合以外も対応する)
           let ntnSpec = NTN.NTNSpec { 
             entity_num_embed = entityCount, 
             relation_num_embed = relationCount, 
