@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveAnyClass #-}
--- {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -9,6 +8,7 @@ module DTS.NeuralDTS.NeuralDTS  (
   ) where
 
 import Control.Monad (forM, replicateM)
+import Control.Monad.RWS (MonadState(put))
 import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
@@ -23,52 +23,51 @@ import System.Directory (createDirectoryIfMissing)
 import Debug.Trace
 
 import DTS.NeuralDTS.PreProcess (getTrainRelations)
-import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel, crossValidation)
+import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel)
 import qualified Parser.ChartParser as CP
 import Parser.Language (jpOptions) 
 import qualified Parser.Language.Japanese.Juman.CallJuman as Juman
 import qualified Parser.Language.Japanese.Lexicon as L (LexicalResource(..), lexicalResourceBuilder, LexicalItems, lookupLexicon, setupLexicon, emptyCategories, myLexicon)
-import Control.Monad.RWS (MonadState(put))
+import qualified DTS.NeuralDTS.Classifier.Utils as Utils
+import qualified DTS.NeuralDTS.Classifier.MLP as MLP (trainModel, testModel, MLPSpec(..))
+import qualified DTS.NeuralDTS.Classifier.NTN as NTN (trainModel, testModel, NTNSpec(..))
 
 inputsDir = "src/DTS/NeuralDTS/inputs"
-dataSetDir = "src/DTS/NeuralDTS/dataSet"
+dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 modelsDir = "src/DTS/NeuralDTS/models"
 indexNum = 12
 
 checkAccuracy :: CP.ParseSetting -> [T.Text] -> IO ()
 checkAccuracy ps str = do
-  createDirectoryIfMissing True (dataSetDir </> show indexNum)
+  createDirectoryIfMissing True (dataDir </> show indexNum)
   createDirectoryIfMissing True (imagesDir </> show indexNum)
   createDirectoryIfMissing True (modelsDir </> show indexNum)
-  -- ((posOrgRelations, posAddRelations), (negOrgRelations, negAddRelations)) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 
-  -- putStrLn "Training Relations:"
-  -- print posRelations
-  -- print negRelations
+  -- ((posOrgRelations, posAddRelations), (negOrgRelations, negAddRelations)) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 
   -- ファイルから読み込み
   let arities = [2]
   posOrgRelationsList <- forM arities $ \arity -> do
-    let filePath = dataSetDir </> show indexNum </> ("pos_org_relations_" ++ show arity ++ ".csv")
+    let filePath = dataDir </> show indexNum </> ("pos_org_relations_" ++ show arity ++ ".csv")
     csvLines <- readCsv filePath
     return $ parseRelations arity csvLines
   let posOrgRelations = Map.unionsWith (++) posOrgRelationsList
   
   posAddRelationsList <- forM arities $ \arity -> do
-    let filePath = dataSetDir </> show indexNum </> ("pos_add_relations_" ++ show arity ++ ".csv")
+    let filePath = dataDir </> show indexNum </> ("pos_add_relations_" ++ show arity ++ ".csv")
     csvLines <- readCsv filePath
     return $ parseRelations arity csvLines
   let posAddRelations = Map.unionsWith (++) posAddRelationsList
 
   negOrgRelationsList <- forM arities $ \arity -> do
-    let filePath = dataSetDir </> show indexNum </> ("neg_org_relations_" ++ show arity ++ ".csv")
+    let filePath = dataDir </> show indexNum </> ("neg_org_relations_" ++ show arity ++ ".csv")
     csvLines <- readCsv filePath
     return $ parseRelations arity csvLines
   let negOrgRelations = Map.unionsWith (++) negOrgRelationsList
 
   negAddRelationsList <- forM arities $ \arity -> do
-    let filePath = dataSetDir </> show indexNum </> ("neg_add_relations_" ++ show arity ++ ".csv")
+    let filePath = dataDir </> show indexNum </> ("neg_add_relations_" ++ show arity ++ ".csv")
     csvLines <- readCsv filePath
     return $ parseRelations arity csvLines
   let negAddRelations = Map.unionsWith (++) negAddRelationsList
@@ -97,12 +96,39 @@ checkAccuracy ps str = do
 
   let orgDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledOrgData]
   let addDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledAddData]
-  
+
   mapM_ (\arity -> do
           let orgDataForArity = Map.findWithDefault [] arity orgDataMap
           let addDataForArity = Map.findWithDefault [] arity addDataMap
-          averageAccuracy <- crossValidation 5 orgDataForArity addDataForArity arity
-          putStrLn $ "Average accuracy for arity " ++ show arity ++ ": " ++ show averageAccuracy ++ "%"
+          entityCount <- Utils.getLineCount (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv")
+          relationCount <- Utils.getLineCount (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv")
+          putStrLn $ "entityCount: " ++ show entityCount
+          putStrLn $ "relationCount: " ++ show relationCount
+          S.hFlush S.stdout
+          
+          -- MLPを使用する場合
+          -- let mlpSpec = MLP.MLPSpec {
+          --   entity_num_embed = entityCount,
+          --   relation_num_embed = relationCount,
+          --   entity_features = 256,
+          --   relation_features = 256,
+          --   hidden_dim1 = 216,
+          --   hidden_dim2 = 32,
+          --   output_feature = 1,
+          --   arity = arity }
+          -- averageAccuracyMLP <- Utils.crossValidation 5 mlpSpec MLP.trainModel MLP.testModel orgDataForArity addDataForArity arity
+          -- putStrLn $ "Average accuracy for MLP with arity " ++ show arity ++ ": " ++ show averageAccuracyMLP ++ "%"
+          
+          -- NTNを使用する場合
+          let ntnSpec = NTN.NTNSpec { 
+            entity_num_embed = entityCount, 
+            relation_num_embed = relationCount, 
+            embedding_features = 256, 
+            tensor_dim = 256,
+            num_arguments = arity,
+            dropout_probability = 0.05 }
+          averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec NTN.trainModel NTN.testModel orgDataForArity addDataForArity arity
+          putStrLn $ "Average accuracy for NTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
         ) (Map.keys orgDataMap)
 
 -- CSVファイルを読み込む関数

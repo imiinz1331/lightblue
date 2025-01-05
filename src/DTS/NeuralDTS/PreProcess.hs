@@ -44,7 +44,7 @@ import qualified DTS.NaturalLanguageInference as NLI
 import qualified DTS.NeuralDTS.WordNet.WordNet as WN
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
-indexNum = 12
+indexNum = 13
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
