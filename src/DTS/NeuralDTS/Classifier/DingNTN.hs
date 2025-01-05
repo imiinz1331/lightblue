@@ -1,80 +1,101 @@
-{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE InstanceSigs #-}
 
-module DTS.NeuralDTS.Classifier.MLP (
-  trainModel
-  ,testModel
-  ,MLPSpec(..)
-  ) where
+module DTS.NeuralDTS.Classifier.DingNTN (
+    trainModel
+    ,testModel
+    ,DNTNSpec(..)
+) where
 
-import Control.Monad (when)
+import Control.Monad (when, replicateM)
+import Data.Binary as B
 import Data.List (transpose)
-import qualified Data.Binary as B
-import GHC.Generics ( Generic )
-import ML.Exp.Chart (drawLearningCurve)
-import Torch
-import Torch.Control (mapAccumM, makeBatch)
-import qualified Torch.Train
-import System.Directory (createDirectoryIfMissing)
+import Debug.Trace as D
+import GHC.Generics
 import System.FilePath ((</>))
-import System.Mem (performGC)
 import qualified System.IO as S
 import System.IO.Unsafe (unsafePerformIO)
-import System.IO (withFile, IOMode(..), hFileSize)
-import System.Random.Shuffle (shuffle')
+import System.Directory (createDirectoryIfMissing)
+import ML.Exp.Chart (drawLearningCurve)
 
-import DTS.NeuralDTS.Classifier
+import Torch
+import Torch.Control (mapAccumM, makeBatch)
+import Torch.Functional.Internal (mm, bmm)
+import Torch.Layer.Linear (LinearHypParams(..), LinearParams, linearLayer)
+import qualified Torch.Train
+
+import DTS.NeuralDTS.Classifier (Classifier(..))
 
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 indexNum = 13
 
-data MLPSpec = MLPSpec
-  { 
-    entity_num_embed :: Int,
+data DNTNSpec = DNTNSpec
+  { entity_num_embed :: Int,
     relation_num_embed :: Int,
-    entity_features :: Int,
-    relation_features :: Int,
-    hidden_dim1 :: Int,
-    hidden_dim2 :: Int,
-    output_feature :: Int,
-    arity :: Int
-  } deriving (Generic, B.Binary, Show)
+    embedding_features :: Int,
+    tensor_dim :: Int,
+    num_arguments :: Int,
+    dropout_probability :: Double
+  } deriving (Generic, Binary, Show)
 
-data MLP = MLP
+data DNTN = DNTN
   { 
     entity_emb :: Parameter,
     relation_emb :: Parameter,
-    linear_layer1 :: Linear,
-    linear_layer2 :: Linear,
-    linear_layer3 :: Linear
+    tensor_layer1 :: Parameter,
+    tensor_layer2 :: Parameter,
+    tensor_layer3 :: Parameter,
+    linear_layer1 :: LinearParams,
+    linear_layer2 :: LinearParams,
+    linear_layer3 :: LinearParams,
+    linear_layer :: LinearParams,
+    dropout_prob :: Double
   } deriving (Generic, Parameterized)
 
-instance Show MLP where
-  show MLP {..} = show entity_emb ++ "\n" ++ show relation_emb ++ "\n" ++ show linear_layer1  ++ "\n"++ show linear_layer2 ++ "\n"++ show linear_layer3 ++ "\n"
+instance Randomizable DNTNSpec DNTN where
+  sample DNTNSpec {..} = DNTN
+    <$> (makeIndependent =<< randnIO' [entity_num_embed, embedding_features])
+    <*> (makeIndependent =<< randnIO' [relation_num_embed, embedding_features])
+    <*> (makeIndependent =<< randnIO' [embedding_features, embedding_features, tensor_dim])
+    <*> (makeIndependent =<< randnIO' [embedding_features, embedding_features, tensor_dim])
+    <*> (makeIndependent =<< randnIO' [tensor_dim, tensor_dim, tensor_dim])
+    <*> sample (LinearHypParams myDevice True (embedding_features * 2) tensor_dim)
+    <*> sample (LinearHypParams myDevice True (embedding_features * 2) tensor_dim)
+    <*> sample (LinearHypParams myDevice True (tensor_dim * 2) tensor_dim)
+    <*> sample (LinearHypParams myDevice True tensor_dim 1)
+    <*> return dropout_probability
 
-instance Randomizable MLPSpec MLP where
-  sample MLPSpec {..} = MLP
-    <$> (makeIndependent =<< randnIO' [entity_num_embed, entity_features])
-    <*> (makeIndependent =<< randnIO' [relation_num_embed, relation_features])
-    <*> sample (LinearSpec (entity_features * arity + relation_features) hidden_dim1) -- 最初の線形層の入力サイズ 160
-    <*> sample (LinearSpec hidden_dim1 hidden_dim2)
-    <*> sample (LinearSpec hidden_dim2 output_feature)
-
-instance Classifier MLP where
-  classify :: MLP -> RuntimeMode -> Tensor -> [Tensor] -> Tensor
-  classify MLP {..} _ predTensor entitiesTensor =
-    let pred2 = embedding' (toDependent relation_emb) predTensor
-        entities = map (embedding' (toDependent entity_emb)) entitiesTensor
-        input = cat (Dim 1) (pred2 : entities)
-        -- input = cat (Dim 1) (entities ++ [relation])
-        nonlinearity = Torch.sigmoid
-    in nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
-       $ linear linear_layer1 $ input
+instance Classifier DNTN where
+  classify :: DNTN -> RuntimeMode -> Tensor -> [Tensor] -> Tensor
+  classify DNTN {..} mode relation_idxes [entity1_idxes, entity2_idxes] =
+    let entity1 = embedding' (toDependent entity_emb) entity1_idxes
+        relation = embedding' (toDependent relation_emb) relation_idxes
+        entity2 = embedding' (toDependent entity_emb) entity2_idxes
+        r1 = Torch.tanh $ tensorLinear entity1 relation linear_layer1 tensor_layer1
+        r2 = Torch.tanh $ tensorLinear relation entity2 linear_layer2 tensor_layer2
+        u = Torch.tanh $ tensorLinear r1 r2 linear_layer3 tensor_layer3
+        -- output = Torch.sigmoid $ linearLayer linear_layer u
+        u_dropped = if mode == Train then unsafePerformIO $ dropout dropout_prob True u else u
+        output = Torch.sigmoid $ linearLayer linear_layer u_dropped
+    in output
+    
+tensorLinear :: Tensor -> Tensor -> LinearParams -> Parameter -> Tensor
+tensorLinear o1 o2 linear_layer tensor_layer = 
+  let batchSize2 = shape o1 !! 0
+      d = shape o1 !! 1
+      o1_o2 = cat (Dim 1) [o1, o2]
+      linear_product = linearLayer linear_layer o1_o2
+      o1_tensor = mm o1 (view [d, -1] (toDependent tensor_layer))
+      -- |tensor_product| = (batch_size, tensor_dim, 1)
+      tensor_product = bmm (view [batchSize2, -1, d] o1_tensor) (contiguous $ permute [0, 2, 1] $ unsqueeze (Dim 1) o2)
+      -- |tensor_product_shaped| = (batch_size, tensor_dim)
+      tensor_product_shaped = reshape [shape tensor_product !! 0, shape tensor_product !! 1] tensor_product
+  in tensor_product_shaped + linear_product
 
 --------------------------------------------------------------------------------
 -- Training code
@@ -83,14 +104,13 @@ instance Classifier MLP where
 batchSize :: Int
 batchSize = 256
 numIters :: Integer
-numIters = 100
+numIters = 500
 myDevice :: Device
 myDevice = Device CUDA 0
--- myDevice = Device CPU 0
 mode :: RuntimeMode
 mode = Train
 lr :: LearningRate
-lr = 5e-2
+lr = 5e-3
 
 calculateLoss :: (Classifier n) => n -> [(([Int], Int), Float)] -> IO Tensor
 calculateLoss model dataSet = do
@@ -104,7 +124,7 @@ calculateLoss model dataSet = do
   let prediction = squeezeAll $ classify model mode relationIdxTensor entityIdxTensors
   return $ binaryCrossEntropyLoss' teachers prediction
 
-trainModel :: String -> MLPSpec -> [(([Int], Int), Float)] -> Int -> IO ()
+trainModel :: String -> DNTNSpec -> [(([Int], Int), Float)] -> Int -> IO ()
 trainModel modelName spec trainData arity = do
   putStrLn $ "trainModel : " ++ show arity
   S.hFlush S.stdout
@@ -114,7 +134,7 @@ trainModel modelName spec trainData arity = do
     error "Training data is empty. Check your input data."
 
   -- 設定値を出力
-  -- putStrLn $ "Model Specification: " ++ show spec
+  putStrLn $ "Model Specification: " ++ show spec
   putStrLn $ "Batch Size: " ++ show batchSize
   putStrLn $ "Number of Iterations: " ++ show numIters
   putStrLn $ "Device: " ++ show myDevice
@@ -126,8 +146,8 @@ trainModel modelName spec trainData arity = do
 
   -- model
   initModel <- toDevice myDevice <$> sample spec
-  let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
-  -- let optimizer = GD
+  let optimizer = GD
+--   let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
   
   ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
@@ -137,15 +157,14 @@ trainModel modelName spec trainData arity = do
         return (updated, asValue loss::Float)
     -- batch の長さでlossをわる
     let batchloss = sum batchLosses / (fromIntegral (length batchLosses)::Float)
-    -- when (epoch `mod` 10 == 0) $ do
-    --   putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
     putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+    S.hFlush S.stdout
     return (batchTrained, batchloss)
 
   -- モデルを保存
   let modelDir = modelsDir </> show indexNum
   createDirectoryIfMissing True modelDir
-  Torch.Train.saveParams trainedModel (modelDir </> modelName ++ "_arity" ++ show arity ++ ".model")
+  Torch.saveParams trainedModel (modelDir </> modelName ++ "_arity" ++ show arity ++ ".model")
   B.encodeFile (modelDir </> modelName ++ "_arity" ++ show arity ++ ".model-spec") spec
   putStrLn $ "Model saved to " ++ modelDir ++ "/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
   S.hFlush S.stdout
@@ -157,7 +176,7 @@ trainModel modelName spec trainData arity = do
   drawLearningCurve imagePath "Learning Curve" [("", reverse losses)]
   putStrLn $ "drawLearningCurve to " ++ imagePath
 
-testModel :: String -> MLPSpec -> [(([Int], Int), Float)] -> Int -> IO Double
+testModel :: String -> DNTNSpec -> [(([Int], Int), Float)] -> Int -> IO Double
 testModel modelName spec testRelations arity = do
   putStrLn "testModel"
 

@@ -51,6 +51,7 @@ dependencies:
   - store >= 0.7.14
   - async
   - random-shuffle
+  - sqlite-simple
 
 library:
   source-dirs: src

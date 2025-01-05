@@ -30,13 +30,14 @@ import qualified Parser.Language.Japanese.Juman.CallJuman as Juman
 import qualified Parser.Language.Japanese.Lexicon as L (LexicalResource(..), lexicalResourceBuilder, LexicalItems, lookupLexicon, setupLexicon, emptyCategories, myLexicon)
 import qualified DTS.NeuralDTS.Classifier.Utils as Utils
 import qualified DTS.NeuralDTS.Classifier.MLP as MLP (trainModel, testModel, MLPSpec(..))
-import qualified DTS.NeuralDTS.Classifier.NTN as NTN (trainModel, testModel, NTNSpec(..))
+import qualified DTS.NeuralDTS.Classifier.SocherNTN as SNTN (trainModel, testModel, SNTNSpec(..))
+import qualified DTS.NeuralDTS.Classifier.DingNTN as DNTN (trainModel, testModel, DNTNSpec(..))
 
 inputsDir = "src/DTS/NeuralDTS/inputs"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 modelsDir = "src/DTS/NeuralDTS/models"
-indexNum = 13
+indexNum = 11
 
 checkAccuracy :: CP.ParseSetting -> [T.Text] -> IO ()
 checkAccuracy ps str = do
@@ -119,16 +120,25 @@ checkAccuracy ps str = do
           -- averageAccuracyMLP <- Utils.crossValidation 5 mlpSpec MLP.trainModel MLP.testModel orgDataForArity addDataForArity arity
           -- putStrLn $ "Average accuracy for MLP with arity " ++ show arity ++ ": " ++ show averageAccuracyMLP ++ "%"
           
-          -- NTNを使用する場合 (TODO : n=2の場合以外も対応する)
-          let ntnSpec = NTN.NTNSpec { 
+          -- Socher NTNを使用する場合 (TODO : n=2の場合以外も対応する)
+          let ntnSpec = SNTN.SNTNSpec { 
             entity_num_embed = entityCount, 
             relation_num_embed = relationCount, 
-            embedding_features = 256, 
-            tensor_dim = 256,
-            num_arguments = arity,
-            dropout_probability = 0.05 }
-          averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec NTN.trainModel NTN.testModel orgDataForArity addDataForArity arity
-          putStrLn $ "Average accuracy for NTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
+            embedding_features = 128, 
+            output_dim = 32 }
+          averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec SNTN.trainModel SNTN.testModel orgDataForArity addDataForArity arity
+          putStrLn $ "Average accuracy for SNTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
+
+          -- -- Ding NTNを使用する場合 (TODO : n=2の場合以外も対応する)
+          -- let ntnSpec = DNTN.DNTNSpec { 
+          --   entity_num_embed = entityCount, 
+          --   relation_num_embed = relationCount, 
+          --   embedding_features = 256, 
+          --   tensor_dim = 256,
+          --   num_arguments = arity,
+          --   dropout_probability = 0.05 }
+          -- averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec DNTN.trainModel DNTN.testModel orgDataForArity addDataForArity arity
+          -- putStrLn $ "Average accuracy for DNTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
         ) (Map.keys orgDataMap)
 
 -- CSVファイルを読み込む関数
