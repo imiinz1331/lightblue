@@ -93,10 +93,10 @@ writeEntityPredDict :: Int -> Map.Map String Int -> Map.Map String Int -> IO ()
 writeEntityPredDict arity entitiesMap predsMap = do
   let entitiesIndex = Map.toList entitiesMap
       predsIndex = Map.toList predsMap
-  writeCsv (dataDir </> "entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv") entitiesIndex
-  writeCsv (dataDir </> "predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv") predsIndex
-  putStrLn $ "Entity Dictionary written to entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv"
-  putStrLn $ "Predicate Dictionary written to predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv"
+  writeCsv (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv") entitiesIndex
+  writeCsv (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv") predsIndex
+  putStrLn $ "Entity Dictionary written to entity_dict_" ++ show arity ++ ".csv"
+  putStrLn $ "Predicate Dictionary written to predicate_dict_" ++ show arity ++ ".csv"
   S.hFlush S.stdout
 
 -- n項述語に対応するための関数
@@ -144,9 +144,9 @@ getTrainRelations ps posStr = do
               ) addData
         in (arity, relations)
         ) result
-  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "pos_org_relations_" ++ show arity ++ ".csv")
     posRelations) (Map.toList posOrgRelationsByArity)
-  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> "pos_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "pos_add_relations_" ++ show arity ++ ".csv")
     posRelations) (Map.toList posAddRelationsByArity)
   putStrLn $ "posRelation written to pos_relations" ++ "_" ++ show indexNum ++ ".csv"
   S.hFlush S.stdout
@@ -171,9 +171,9 @@ getTrainRelations ps posStr = do
   let negAddRelationsByArity = Map.fromList negAddRelationsByArityList
 
   -- ネガティブデータをCSVファイルに書き込み
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_org_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_org_relations_" ++ show arity ++ ".csv")
     negRelations) (Map.toList negOrgRelationsByArity)
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> "neg_add_relations_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_add_relations_" ++ show arity ++ ".csv")
     negRelations) (Map.toList negAddRelationsByArity)
 
   putStrLn $ "negRelation written to neg_relations" ++ "_" ++ show indexNum ++ ".csv"
@@ -199,7 +199,7 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
   putStrLn $ "~~strToEntityPred~~"
   S.hFlush S.stdout
   -- バッチ処理を実行
-  let batchSize = 100
+  let batchSize = (length strIndexed) `div` 10
   let batches = chunksOf batchSize strIndexed
 
   nodeslist <- fmap concat $ mapConcurrently (processBatch ps) batches

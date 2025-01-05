@@ -48,7 +48,7 @@ data MLPSpec = MLPSpec
     hidden_dim2 :: Int,
     output_feature :: Int,
     arity :: Int
-  } deriving (Generic, B.Binary)
+  } deriving (Generic, B.Binary, Show)
 
 data MLP = MLP
   { 
@@ -88,7 +88,7 @@ instance Classifier MLP where
 batchSize :: Int
 batchSize = 256
 numIters :: Integer
-numIters = 500
+numIters = 100
 myDevice :: Device
 myDevice = Device CUDA 0
 -- myDevice = Device CPU 0
@@ -115,32 +115,31 @@ calculateLoss model dataSet = do
   return $ binaryCrossEntropyLoss' teachers prediction
 
 -- 交差検証を行う関数
-crossValidation :: Int -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO Double
-crossValidation k dataSet addData testData arity = do
+crossValidation :: Int -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO Double
+crossValidation k dataSet addData arity = do
   putStrLn $ "Cross Validation with " ++ show k ++ " folds"
   S.hFlush S.stdout
-
   -- データをシャッフル
   gen <- newStdGen
   let shuffledData = shuffle' dataSet (length dataSet) gen
-
   -- データをk分割
   let folds = splitIntoFolds k shuffledData
-
   -- 各フォールドで訓練と検証を行う
   accuracies <- mapM (\(i, fold) -> do
-        putStrLn $ "Starting fold " ++ show i
         let (trainFolds, validFold) = splitAtFold i folds
         putStrLn $ "Fold " ++ show i ++ ": Train size = " ++ show (length (concat trainFolds)) ++ ", Valid size = " ++ show (length validFold)
         let trainData' = concat trainFolds ++ addData
+        gen1 <- newStdGen
+        let shuffledTrainData = shuffle' trainData' (length trainData') gen1
         let validData' = validFold
-        putStrLn $ "Fold " ++ show i ++ ": Train size = " ++ show (length trainData') ++ ", Valid size = " ++ show (length validData')
+        gen2 <- newStdGen
+        let shuffledValidData = shuffle' validData' (length validData') gen2
+        putStrLn $ "Fold " ++ show i ++ ": AddTrain size = " ++ show (length shuffledTrainData) ++ ", Valid size = " ++ show (length shuffledValidData)
         let modelName = "model_fold_" ++ show i
-        trainModel modelName trainData' validData' arity
-        accuracy <- testModel modelName testData arity
+        trainModel modelName shuffledTrainData arity
+        accuracy <- testModel modelName shuffledValidData arity
         return accuracy
         ) (zip [0..k-1] folds)
-
   let averageAccuracy = sum accuracies / fromIntegral k
   putStrLn $ "Cross Validation finished. Average accuracy: " ++ show averageAccuracy ++ "%"
   return averageAccuracy
@@ -158,15 +157,15 @@ splitAtFold i folds = let (before, after) = splitAt i folds
                          then error "splitAtFold: after is empty"
                          else (before ++ tail after, head after)
 
-trainModel :: String -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO ()
-trainModel modelName trainData validData arity = do
+trainModel :: String -> [(([Int], Int), Float)] -> Int -> IO ()
+trainModel modelName trainData arity = do
   putStrLn $ "trainModel : " ++ show arity
   S.hFlush S.stdout
 
-  entityCount <- getLineCount (dataDir </> "entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  relationCount <- getLineCount (dataDir </> "predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  print $ "entityCount: " ++ show entityCount
-  print $ "relationCount: " ++ show relationCount
+  entityCount <- getLineCount (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv")
+  relationCount <- getLineCount (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv")
+  putStrLn $ "entityCount: " ++ show entityCount
+  putStrLn $ "relationCount: " ++ show relationCount
   S.hFlush S.stdout
 
   -- モデルの設定
@@ -181,51 +180,46 @@ trainModel modelName trainData validData arity = do
         , arity = arity
         }
 
-
   -- データが空でないことを確認
-  when (null trainData && null validData) $ do
+  when (null trainData) $ do
     error "Training data or labels are empty. Check your input data."
+
+  -- 設定値を出力
+  putStrLn $ "Model Specification: " ++ show spec
+  putStrLn $ "Batch Size: " ++ show batchSize
+  putStrLn $ "Number of Iterations: " ++ show numIters
+  putStrLn $ "Device: " ++ show myDevice
+  putStrLn $ "Runtime Mode: " ++ show mode
+  putStrLn $ "Learning Rate: " ++ show lr
 
   -- 学習プロセス
   let batchedTrainSet = makeBatch batchSize trainData
-  let batchedValidSet = makeBatch batchSize validData
-  
+
   -- model
   initModel <- toDevice myDevice <$> sample spec
   
   ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
-    -- putStrLn $ "epoch #" ++ show epoch
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
       \batch (model, opt) -> do
-        -- loss
         loss <- calculateLoss model batch
         updated <- runStep model opt loss lr
-        -- performGC
         return (updated, asValue loss::Float)
     -- batch の長さでlossをわる
     let batchloss = sum batchLosses / (fromIntegral (length batchLosses)::Float)
-    -- 検証データで評価
-    validLosses <- mapM (calculateLoss batchModel) batchedValidSet
-    let validLoss = sum validLosses / fromIntegral (length validLosses)
-    putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
-    putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
-    -- when (epoch `mod` 100 == 0) $ do
-    --   putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
-    --   putStrLn $ "Validation Loss: " ++ show (asValue validLoss :: Float)
-      -- S.hFlush S.stdout
-    return (batchTrained, (batchloss, asValue validLoss :: Float))
+    -- putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+    when (epoch `mod` 10 == 0) $ do
+      putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+    return (batchTrained, batchloss)
 
   -- モデルを保存
-  Torch.Train.saveParams trainedModel (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model")
-  B.encodeFile (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model-spec") spec
-  putStrLn $ "Model saved to models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
+  Torch.Train.saveParams trainedModel (modelsDir </> show indexNum </> modelName ++ "_arity" ++ show arity ++ ".model")
+  B.encodeFile (modelsDir </> show indexNum </> modelName ++ "_arity" ++ show arity ++ ".model-spec") spec
+  putStrLn $ "Model saved to models/" ++ show indexNum ++ "/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
   S.hFlush S.stdout
 
   -- 学習曲線
-  let (trainLosses, validLosses) = unzip losses
-  drawLearningCurve (imagesDir </> modelName ++ "_learning-curve-training_" ++ show arity ++ ".png") "Learning Curve" [("", reverse trainLosses)]
-  drawLearningCurve (imagesDir </> modelName ++ "_learning-curve-valid_" ++ show arity ++ ".png") "Learning Curve" [("", reverse validLosses)]
-  putStrLn "drawLearningCurve"
+  drawLearningCurve (imagesDir </> show indexNum </> modelName ++ "_learning-curve-training_" ++ show arity ++ ".png") "Learning Curve" [("", reverse losses)]
+  putStrLn $ "drawLearningCurve to images/" ++ show indexNum ++ "/" ++ modelName ++ "_learning-curve-training_" ++ show arity ++ ".png"
 
   where
     optimizer = GD
@@ -238,8 +232,8 @@ testModel :: String -> [(([Int], Int), Float)] -> Int -> IO Double
 testModel modelName testRelations arity = do
   putStrLn "testModel"
 
-  entityCount <- getLineCount (dataDir </> "entity_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
-  relationCount <- getLineCount (dataDir </> "predicate_dict_" ++ show arity ++ "_" ++ show indexNum ++ ".csv")
+  entityCount <- getLineCount (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv")
+  relationCount <- getLineCount (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv")
   let spec = MLPSpec
         { entity_num_embed = entityCount  -- entityの埋め込み数
         , relation_num_embed = relationCount  -- 関係の埋め込み数
@@ -251,8 +245,8 @@ testModel modelName testRelations arity = do
         , arity = arity
         }
 
-  loadedModel <- Torch.Train.loadParams spec (modelsDir </> modelName ++ "_arity" ++ show arity ++ ".model")
-  putStrLn $ "Model loaded from models/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
+  loadedModel <- Torch.Train.loadParams spec (modelsDir </> show indexNum </> modelName ++ "_arity" ++ show arity ++ ".model")
+  putStrLn $ "Model loaded from models/" ++ show indexNum ++ "/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
 
   putStrLn "Testing relations:"
   results <- mapM (\((entities, p), label) -> do
@@ -261,11 +255,11 @@ testModel modelName testRelations arity = do
                         let output = classify loadedModel Eval rTensor entityTensors
                         let confidence = asValue (fst (maxDim (Dim 1) RemoveDim output)) :: Float
                         let confThreshold = 0.5
-                        let prediction = if confidence >= confThreshold then 1 else 0
-                        putStrLn $ "Test: " ++ show entities ++ ", " ++ show p ++ " -> Prediction: " ++ show prediction ++ " label : " ++ show label ++ " with confidence " ++ show confidence
-                        if prediction == 1
-                          then putStrLn "Relation holds."
-                          else putStrLn "Relation does not hold."
+                        let prediction = if confidence >= confThreshold then 1 else 0 :: Int
+                        -- putStrLn $ "Test: " ++ show entities ++ ", " ++ show p ++ " -> Prediction: " ++ show prediction ++ " label : " ++ show label ++ " with confidence " ++ show confidence
+                        -- if prediction == 1
+                        --   then putStrLn "Relation holds."
+                        --   else putStrLn "Relation does not hold."
                         return (label, fromIntegral prediction :: Float))
                     testRelations
 
