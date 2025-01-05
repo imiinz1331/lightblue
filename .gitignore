@@ -23,3 +23,7 @@ stack.yaml.lock
 config.yaml
 .vscode/
 outputs/
+src/DTS/NeuralDTS/models/
+src/DTS/NeuralDTS/outputs/
+src/DTS/NeuralDTS/dataSet/
+src/DTS/NeuralDTS/WordNet/wnjpn.db
