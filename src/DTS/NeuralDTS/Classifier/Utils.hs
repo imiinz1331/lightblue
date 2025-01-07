@@ -18,31 +18,34 @@ import qualified System.IO as S
 import Torch
 import DTS.NeuralDTS.Classifier
 
-crossValidation :: (Classifier n, Randomizable spec n) => Int -> spec -> (String -> spec -> [(([Int], Int), Float)] -> Int -> IO ()) -> (String -> spec -> [(([Int], Int), Float)] -> Int -> IO Double) -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO Double
-crossValidation k spec trainModel testModel dataSet addData arity = do
+crossValidation :: (Classifier n, Randomizable spec n) => Int -> spec -> 
+  (String -> spec -> [(([Int], Int), Float)] -> Int -> IO ()) -> 
+  (String -> spec -> [(([Int], Int), Float)] -> Int -> IO Double) -> 
+  [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> [(([Int], Int), Float)] -> Int -> IO Double
+crossValidation k spec trainModel testModel posOrgData posAddData negOrgData negAddData arity = do
   putStrLn $ "Cross Validation with " ++ show k ++ " folds"
   S.hFlush S.stdout
-  -- データをシャッフル
-  gen <- newStdGen
-  let shuffledData = shuffle' dataSet (length dataSet) gen
   -- データをk分割
-  let folds = splitIntoFolds k shuffledData
+  let posFolds = splitIntoFolds k posOrgData
+  let negFolds = splitIntoFolds k negOrgData
   -- 各フォールドで訓練と検証を行う
-  accuracies <- mapM (\(i, fold) -> do
-        let (trainFolds, validFold) = splitAtFold i folds
-        putStrLn $ "Fold " ++ show i ++ ": Train size = " ++ show (length (concat trainFolds)) ++ ", Valid size = " ++ show (length validFold)
-        let trainData' = concat trainFolds ++ addData
+  accuracies <- mapM (\(i) -> do
+        let (trainPosFolds, validPosFold) = splitAtFold i posFolds
+            (trainNegFolds, validNegFold) = splitAtFold i negFolds
+        let trainFolds = trainPosFolds ++ trainNegFolds
+        let validFold = validPosFold ++ validNegFold
+        putStrLn $ "Fold " ++ show i ++ ": OrgTrain size = " ++ show (length (concat trainFolds)) ++ ", Valid size = " ++ show (length validFold)
+        let addedTrainData = concat trainFolds ++ posAddData ++ negAddData
         gen1 <- newStdGen
-        let shuffledTrainData = shuffle' trainData' (length trainData') gen1
-        let validData' = validFold
+        let shuffledTrainData = shuffle' addedTrainData (length addedTrainData) gen1
         gen2 <- newStdGen
-        let shuffledValidData = shuffle' validData' (length validData') gen2
+        let shuffledValidData = shuffle' validFold (length validFold) gen2
         putStrLn $ "Fold " ++ show i ++ ": AddTrain size = " ++ show (length shuffledTrainData) ++ ", Valid size = " ++ show (length shuffledValidData)
         let modelName = "model_fold_" ++ show i
         _ <- trainModel modelName spec shuffledTrainData arity
         accuracy <- testModel modelName spec shuffledValidData arity
         return accuracy
-        ) (zip [0..k-1] folds)
+        ) [0..k-1]
   let averageAccuracy = sum accuracies / fromIntegral k
   putStrLn $ "Cross Validation finished. Average accuracy: " ++ show averageAccuracy ++ "%"
   return averageAccuracy
