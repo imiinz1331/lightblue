@@ -7,6 +7,7 @@ module DTS.NeuralDTS.PreProcess (
   extractPredicateName
   ,getTrainRelations
   -- getTestRelations
+  , makeNegData
   ) where
 
 import Control.Monad (unless, replicateM, (>=>))
@@ -42,9 +43,10 @@ import qualified DTS.UDTTdeBruijn as UDTT
 import qualified DTS.QueryTypes as QT
 import qualified DTS.NaturalLanguageInference as NLI
 import qualified DTS.NeuralDTS.WordNet.WordNet as WN
+import Parser.Language.Japanese.Templates (entity)
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
-indexNum = 13
+indexNum = 14
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
@@ -98,6 +100,14 @@ writeEntityPredDict arity entitiesMap predsMap = do
   putStrLn $ "Entity Dictionary written to entity_dict_" ++ show arity ++ ".csv"
   putStrLn $ "Predicate Dictionary written to predicate_dict_" ++ show arity ++ ".csv"
   S.hFlush S.stdout
+
+readEntityPredDict :: Int -> IO (Map.Map String Int, Map.Map String Int)
+readEntityPredDict arity = do
+  entitiesIndex <- readCsv (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv")
+  predsIndex <- readCsv (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv")
+  let entitiesMap = Map.fromList entitiesIndex
+      predsMap = Map.fromList predsIndex
+  return (entitiesMap, predsMap)
 
 -- n項述語に対応するための関数
 getTrainRelations :: CP.ParseSetting -> [T.Text] ->
@@ -153,19 +163,15 @@ getTrainRelations ps posStr = do
 
   -- ネガティブデータを作成
   negOrgRelationsByArityList <- mapM (\(arity, posRelations) -> do
-    let posRelationSet = Set.fromList posRelations
-        allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
-        numEntities = Map.size (fst (Data.Maybe.fromJust (lookup arity result)))
-    negRelations <- generateNegRelations posRelationSet allPreds numEntities arity (length posRelations)
+    let allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
+    negRelations <- generateNegRelations posRelations allPreds
     return (arity, negRelations)
     ) (Map.toList posOrgRelationsByArity)
   let negOrgRelationsByArity = Map.fromList negOrgRelationsByArityList
 
   negAddRelationsByArityList <- mapM (\(arity, posRelations) -> do
-    let posRelationSet = Set.fromList posRelations
-        allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
-        numEntities = Map.size (fst (Data.Maybe.fromJust (lookup arity result)))
-    negRelations <- generateNegRelations posRelationSet allPreds numEntities arity (length posRelations)
+    let allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
+    negRelations <- generateNegRelations posRelations allPreds
     return (arity, negRelations)
     ) (Map.toList posAddRelationsByArity)
   let negAddRelationsByArity = Map.fromList negAddRelationsByArityList
@@ -179,6 +185,36 @@ getTrainRelations ps posStr = do
   putStrLn $ "negRelation written to neg_relations" ++ "_" ++ show indexNum ++ ".csv"
   S.hFlush S.stdout
   return ((posOrgRelationsByArity, posAddRelationsByArity), (negOrgRelationsByArity, negAddRelationsByArity))
+
+makeNegData :: Map.Map Int [([Int], Int)] -> Map.Map Int [([Int], Int)] -> IO (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
+makeNegData posOrgData posAddData = do
+  (entityMap, predMap) <- readEntityPredDict 2
+  -- ネガティブデータを作成
+  negOrgRelationsByArityList <- mapM (\(arity, posRelations) -> do
+    let allPreds = Map.elems predMap
+    negRelations <- generateNegRelations posRelations allPreds
+    return (arity, negRelations)
+    ) (Map.toList posOrgData)
+  let negOrgRelationsByArity = Map.fromList negOrgRelationsByArityList
+
+  negAddRelationsByArityList <- mapM (\(arity, posRelations) -> do
+    let allPreds = Map.elems predMap
+        -- usedPreds = Set.fromList $ map snd posRelations -- posRelationSetで使われた述語だけを抽出
+        -- allPreds = filter (`Set.member` usedPreds) $ Map.elems predMap
+    negRelations <- generateNegRelations posRelations allPreds
+    return (arity, negRelations)
+    ) (Map.toList posAddData)
+  let negAddRelationsByArity = Map.fromList negAddRelationsByArityList
+
+  -- ネガティブデータをCSVファイルに書き込み
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_org_relations_" ++ show arity ++ ".csv")
+    negRelations) (Map.toList negOrgRelationsByArity)
+  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_add_relations_" ++ show arity ++ ".csv")
+    negRelations) (Map.toList negAddRelationsByArity)
+
+  putStrLn $ "negRelation written to neg_relations" ++ "_" ++ show indexNum ++ ".csv"
+  S.hFlush S.stdout
+  return (negOrgRelationsByArity, negAddRelationsByArity)
 
 processBatch :: CP.ParseSetting -> [(T.Text, T.Text)] -> IO [[(T.Text, CCG.Node)]]
 processBatch ps batch = do
@@ -309,18 +345,15 @@ extractPredicateName preterm =
   -- trace ("extractPredicateName: Non-Con type encountered: " ++ show preterm) preterm
   preterm
 
--- TODO shuffle関数を使う
-generateNegRelations :: Set.Set ([Int], Int) -> [Int] -> Int -> Int -> Int -> IO [([Int], Int)]
-generateNegRelations posRelationSet allPreds numEntities arity numNegRelations = do
-  gen <- newStdGen
-  let generateSingleNegRelation = do
-        entityCombination <- replicateM arity (randomRIO (0, numEntities - 1))
-        pred <- randomRIO (0, length allPreds - 1)
-        let negRelation = (entityCombination, allPreds !! pred)
-        if Set.member negRelation posRelationSet
-          then generateSingleNegRelation
-          else return negRelation
-  mapM (const generateSingleNegRelation) [1..numNegRelations]
+generateNegRelations :: [([Int], Int)] -> [Int] -> IO [([Int], Int)]
+generateNegRelations posRelations allPreds = do
+  negRelations <- mapM (\(entities, pred) -> do
+    let otherPreds = filter (/= pred) allPreds
+    newPred <- randomRIO (0, length otherPreds - 1)
+    let negRelation = (entities, allPreds !! newPred)
+    return negRelation
+    ) posRelations
+  return negRelations
 
 randomChoice :: [a] -> IO a
 randomChoice xs = do
