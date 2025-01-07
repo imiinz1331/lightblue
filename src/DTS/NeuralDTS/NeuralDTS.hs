@@ -22,7 +22,7 @@ import System.Random.Shuffle (shuffle, shuffle')
 import System.Directory (createDirectoryIfMissing)
 import Debug.Trace
 
-import DTS.NeuralDTS.PreProcess (getTrainRelations)
+import DTS.NeuralDTS.PreProcess (getTrainRelations, makeNegData)
 import DTS.NeuralDTS.Classifier.MLP (trainModel, testModel)
 import qualified Parser.ChartParser as CP
 import Parser.Language (jpOptions) 
@@ -32,12 +32,13 @@ import qualified DTS.NeuralDTS.Classifier.Utils as Utils
 import qualified DTS.NeuralDTS.Classifier.MLP as MLP (trainModel, testModel, MLPSpec(..))
 import qualified DTS.NeuralDTS.Classifier.SocherNTN as SNTN (trainModel, testModel, SNTNSpec(..))
 import qualified DTS.NeuralDTS.Classifier.DingNTN as DNTN (trainModel, testModel, DNTNSpec(..))
+import qualified DTS.NeuralDTS.Classifier.TuckER as TuckER (trainModel, testModel, TuckERSpec(..))
 
 inputsDir = "src/DTS/NeuralDTS/inputs"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 modelsDir = "src/DTS/NeuralDTS/models"
-indexNum = 11
+indexNum = 14
 
 checkAccuracy :: CP.ParseSetting -> [T.Text] -> IO ()
 checkAccuracy ps str = do
@@ -46,7 +47,6 @@ checkAccuracy ps str = do
   createDirectoryIfMissing True (modelsDir </> show indexNum)
 
   -- ((posOrgRelations, posAddRelations), (negOrgRelations, negAddRelations)) <- getTrainRelations ps str -- :: (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
-
   -- ファイルから読み込み
   let arities = [2]
   posOrgRelationsList <- forM arities $ \arity -> do
@@ -73,6 +73,8 @@ checkAccuracy ps str = do
     return $ parseRelations arity csvLines
   let negAddRelations = Map.unionsWith (++) negAddRelationsList
 
+  -- (negOrgRelations, negAddRelations) <- makeNegData posOrgRelations posAddRelations
+
   -- ラベルづけ
   let posOrgRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posOrgRelations
   let posAddRelations' = Map.map (map (\(xs, y) -> ((xs, y), 1.0))) posAddRelations
@@ -84,23 +86,32 @@ checkAccuracy ps str = do
   let negOrgRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList negOrgRelations') :: [(Int, (([Int], Int), Float))]
   let negAddRelationsList2 = concatMap (\(k, v) -> map (\x -> (k, x)) v) (Map.toList negAddRelations') :: [(Int, (([Int], Int), Float))]
 
-  let orgData = posOrgRelationsList2 ++ negOrgRelationsList2
-  let addData = posAddRelationsList2 ++ negAddRelationsList2
+  -- let orgData = posOrgRelationsList2 ++ negOrgRelationsList2
+  -- let addData = posAddRelationsList2 ++ negAddRelationsList2
 
-  genOrg <- newStdGen
-  genAdd <- newStdGen
-  let shuffledOrgData = shuffle' orgData (length orgData) genOrg
-  let shuffledAddData = shuffle' addData (length addData) genAdd
+  genPosOrg <- newStdGen
+  genPosAdd <- newStdGen
+  genNegOrg <- newStdGen
+  genNegAdd <- newStdGen
 
-  putStrLn $ "TrainValid Relations Count: " ++ show (length orgData)
+  let shuffledPosOrgData = shuffle' posOrgRelationsList2 (length posOrgRelationsList2) genPosOrg
+  let shuffledPosAddData = shuffle' posAddRelationsList2 (length posAddRelationsList2) genPosAdd
+  let shuffledNegOrgData = shuffle' negOrgRelationsList2 (length negOrgRelationsList2) genNegOrg
+  let shuffledNegAddData = shuffle' negAddRelationsList2 (length negAddRelationsList2) genNegAdd
+
+  putStrLn $ "TrainValid Relations Count: " ++ show (length shuffledPosOrgData + length shuffledNegOrgData)
   S.hFlush S.stdout
 
-  let orgDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledOrgData]
-  let addDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledAddData]
+  let posOrgDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledPosOrgData]
+  let posAddDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledPosAddData]
+  let negOrgDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledNegOrgData]
+  let negAddDataMap = Map.fromListWith (++) [(k, [v]) | (k, v) <- shuffledNegAddData]
 
   mapM_ (\arity -> do
-          let orgDataForArity = Map.findWithDefault [] arity orgDataMap
-          let addDataForArity = Map.findWithDefault [] arity addDataMap
+          let posOrgDataForArity = Map.findWithDefault [] arity posOrgDataMap
+          let posAddDataForArity = Map.findWithDefault [] arity posAddDataMap
+          let negOrgDataForArity = Map.findWithDefault [] arity negOrgDataMap
+          let negAddDataForArity = Map.findWithDefault [] arity negAddDataMap
           entityCount <- Utils.getLineCount (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv")
           relationCount <- Utils.getLineCount (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv")
           putStrLn $ "entityCount: " ++ show entityCount
@@ -108,38 +119,49 @@ checkAccuracy ps str = do
           S.hFlush S.stdout
           
           -- MLPを使用する場合
-          -- let mlpSpec = MLP.MLPSpec {
-          --   entity_num_embed = entityCount,
-          --   relation_num_embed = relationCount,
-          --   entity_features = 256,
-          --   relation_features = 256,
-          --   hidden_dim1 = 216,
-          --   hidden_dim2 = 32,
-          --   output_feature = 1,
-          --   arity = arity }
+          let mlpSpec = MLP.MLPSpec {
+            entity_num_embed = entityCount,
+            relation_num_embed = relationCount,
+            entity_features = 256,
+            relation_features = 256,
+            hidden_dim1 = 216,
+            hidden_dim2 = 32,
+            output_feature = 1,
+            arity = arity }
           -- averageAccuracyMLP <- Utils.crossValidation 5 mlpSpec MLP.trainModel MLP.testModel orgDataForArity addDataForArity arity
-          -- putStrLn $ "Average accuracy for MLP with arity " ++ show arity ++ ": " ++ show averageAccuracyMLP ++ "%"
+          averageAccuracyMLP <- Utils.crossValidation 5 mlpSpec MLP.trainModel MLP.testModel posOrgDataForArity posAddDataForArity negOrgDataForArity negAddDataForArity arity
+          putStrLn $ "Average accuracy for MLP with arity " ++ show arity ++ ": " ++ show averageAccuracyMLP ++ "%"
           
           -- Socher NTNを使用する場合 (TODO : n=2の場合以外も対応する)
-          let ntnSpec = SNTN.SNTNSpec { 
-            entity_num_embed = entityCount, 
-            relation_num_embed = relationCount, 
-            embedding_features = 128, 
-            output_dim = 32 }
-          averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec SNTN.trainModel SNTN.testModel orgDataForArity addDataForArity arity
-          putStrLn $ "Average accuracy for SNTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
+          -- let ntnSpec = SNTN.SNTNSpec { 
+          --   entity_num_embed = entityCount, 
+          --   relation_num_embed = relationCount, 
+          --   embedding_features = 128, 
+          --   output_dim = 32 }
+          -- averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec SNTN.trainModel SNTN.testModel orgDataForArity addDataForArity arity
+          -- putStrLn $ "Average accuracy for SNTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
 
-          -- -- Ding NTNを使用する場合 (TODO : n=2の場合以外も対応する)
+          -- Ding NTNを使用する場合 (TODO : n=2の場合以外も対応する)
           -- let ntnSpec = DNTN.DNTNSpec { 
           --   entity_num_embed = entityCount, 
           --   relation_num_embed = relationCount, 
           --   embedding_features = 256, 
           --   tensor_dim = 256,
           --   num_arguments = arity,
-          --   dropout_probability = 0.05 }
+          --   dropout_probability = 0.1 }
           -- averageAccuracyNTN <- Utils.crossValidation 5 ntnSpec DNTN.trainModel DNTN.testModel orgDataForArity addDataForArity arity
           -- putStrLn $ "Average accuracy for DNTN with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
-        ) (Map.keys orgDataMap)
+
+          -- TuckERを使用する場合
+          -- let terSpec = TuckER.TuckERSpec {
+          --   numEntities = entityCount,
+          --   numRelations = relationCount,
+          --   entityDim = 256,
+          --   relationDim = 256
+          -- }
+          -- averageAccuracyNTN <- Utils.crossValidation 5 terSpec TuckER.trainModel TuckER.testModel orgDataForArity addDataForArity arity
+          -- putStrLn $ "Average accuracy for TuckER with arity " ++ show arity ++ ": " ++ show averageAccuracyNTN ++ "%"
+        ) (Map.keys posOrgDataMap)
 
 -- CSVファイルを読み込む関数
 readCsv :: FilePath -> IO [T.Text]
@@ -182,7 +204,7 @@ testNeuralDTS = do
   -- CSVファイルを読み込む
   -- posStr <- readCsv (inputsDir ++ "/posStr.csv")
   posStr <- readCsv (inputsDir ++ "/JPWordNet.csv")
-  let posStr2 = take 2000 posStr
+  let posStr2 = take 1000 posStr
 
   lr <- L.lexicalResourceBuilder Juman.KWJA
   let ps = CP.ParseSetting jpOptions lr 1 1 1 1 True Nothing Nothing True False
