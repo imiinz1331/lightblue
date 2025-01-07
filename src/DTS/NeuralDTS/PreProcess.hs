@@ -8,6 +8,8 @@ module DTS.NeuralDTS.PreProcess (
   ,getTrainRelations
   -- getTestRelations
   , makeNegData
+  , generateNegRelations
+  , writeRelationsCsv
   ) where
 
 import Control.Monad (unless, replicateM, (>=>))
@@ -46,7 +48,8 @@ import qualified DTS.NeuralDTS.WordNet.WordNet as WN
 import Parser.Language.Japanese.Templates (entity)
 
 dataDir = "src/DTS/NeuralDTS/dataSet"
-indexNum = 14
+indexNum = 16
+synonym_num = 5
 
 writeCsv :: FilePath -> [(String, Int)] -> IO ()
 writeCsv path dict = S.withFile path S.WriteMode $ \h -> do
@@ -110,81 +113,83 @@ readEntityPredDict arity = do
   return (entitiesMap, predsMap)
 
 -- n項述語に対応するための関数
-getTrainRelations :: CP.ParseSetting -> [T.Text] ->
-  IO ((Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)]), (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)]))
+getTrainRelations :: CP.ParseSetting -> [T.Text] -> IO (Map.Map Int [[([Int], Int)]], Map.Map Int [[([Int], Int)]])
 getTrainRelations ps posStr = do
   putStrLn $ "~~getTrainRelations~~"
   let posStrIndexed = zipWith (\i s -> (T.pack $ "S" ++ show i, s)) [1..] posStr
   let (posEntities, posPreds, (posOrgData, posAddData)) = strToEntityPred ps posStrIndexed
   
   let result = map (\arity -> 
-                      let orgData = Map.findWithDefault [] arity posOrgData
-                          addData = Map.findWithDefault [] arity posAddData
+                      let orgData = concatMap (Map.findWithDefault [] arity) posOrgData
+                          addData = concatMap (Map.findWithDefault [] arity) posAddData
                           (entityMap, predMap) = getEntitiesPredsByArity (posEntities, posPreds, (orgData, addData))
                       in (arity, (entityMap, predMap))
-                    ) (Map.keys posOrgData) -- :: [(Int, (Map String Int, Map String Int))]
+                    ) (Map.keys (head posOrgData))
   mapM_ (\(arity, (entityMap, predMap)) -> writeEntityPredDict arity entityMap predMap) result
 
-  let posOrgData' = Map.filterWithKey (\arity _ -> arity == 2) posOrgData
-  let posAddData' = Map.filterWithKey (\arity _ -> arity == 2) posAddData
+  -- let posOrgData' = map (Map.filterWithKey (\arity _ -> arity == 2)) posOrgData :: [Map.Map Int [(DTT.Preterm, [DTT.Preterm])]]
+  -- let posAddData' = map (Map.filterWithKey (\arity _ -> arity == 2)) posAddData :: [Map.Map Int [(DTT.Preterm, [DTT.Preterm])]]
 
-  let posOrgRelationsByArity = Map.fromList $ map (\(arity, (entityMap, predMap)) ->
-        let orgData = Map.findWithDefault [] arity posOrgData'
-            relations = Data.Maybe.mapMaybe (\(pred, args) -> do
-              let predName = show (extractPredicateName pred)
-              predID <- Map.lookup predName predMap
-              let entityIDs = Data.Maybe.mapMaybe (\arg ->
-                    let argName = show arg
-                    in Map.lookup argName entityMap
-                    ) args
-              return (entityIDs, predID)
-              ) orgData
-        in (arity, relations)
+  let posOrgRelationsByArity = Map.fromListWith (++) $ concatMap (\(arity, (entityMap, predMap)) ->
+        map (\orgData -> 
+          let relations = Data.Maybe.mapMaybe (\(pred, args) -> do
+                let predName = show (extractPredicateName pred)
+                predID <- Map.lookup predName predMap
+                let entityIDs = Data.Maybe.mapMaybe (\arg ->
+                      let argName = show arg
+                      in Map.lookup argName entityMap
+                      ) args
+                return (entityIDs, predID)
+                ) orgData
+          in (arity, [relations])
+          ) (map (Map.findWithDefault [] arity) posOrgData)
+        ) result :: Map.Map Int [[([Int], Int)]]
+  let posAddRelationsByArity = Map.fromListWith (++) $ concatMap (\(arity, (entityMap, predMap)) ->
+        map (\addData -> 
+          let relations = Data.Maybe.mapMaybe (\(pred, args) -> do
+                let predName = show (extractPredicateName pred)
+                predID <- Map.lookup predName predMap
+                let entityIDs = Data.Maybe.mapMaybe (\arg ->
+                      let argName = show arg
+                      in Map.lookup argName entityMap
+                      ) args
+                return (entityIDs, predID)
+                ) addData
+          in (arity, [relations])
+          ) (map (Map.findWithDefault [] arity) posAddData)
         ) result
-  let posAddRelationsByArity = Map.fromList $ map (\(arity, (entityMap, predMap)) ->
-        let addData = Map.findWithDefault [] arity posAddData'
-            relations = Data.Maybe.mapMaybe (\(pred, args) -> do
-              let predName = show (extractPredicateName pred)
-              predID <- Map.lookup predName predMap
-              let entityIDs = Data.Maybe.mapMaybe (\arg ->
-                    let argName = show arg
-                    in Map.lookup argName entityMap
-                    ) args
-              return (entityIDs, predID)
-              ) addData
-        in (arity, relations)
-        ) result
+
   mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "pos_org_relations_" ++ show arity ++ ".csv")
-    posRelations) (Map.toList posOrgRelationsByArity)
+    (concat posRelations)) (Map.toList posOrgRelationsByArity)
   mapM_ (\(arity, posRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "pos_add_relations_" ++ show arity ++ ".csv")
-    posRelations) (Map.toList posAddRelationsByArity)
+    (concat posRelations)) (Map.toList posAddRelationsByArity)
   putStrLn $ "posRelation written to pos_relations" ++ "_" ++ show indexNum ++ ".csv"
   S.hFlush S.stdout
 
   -- ネガティブデータを作成
-  negOrgRelationsByArityList <- mapM (\(arity, posRelations) -> do
-    let allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
-    negRelations <- generateNegRelations posRelations allPreds
-    return (arity, negRelations)
-    ) (Map.toList posOrgRelationsByArity)
-  let negOrgRelationsByArity = Map.fromList negOrgRelationsByArityList
+  -- negOrgRelationsByArityList <- mapM (\(arity, posRelations) -> do
+  --   let allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
+  --   negRelations <- mapM (\relations -> generateNegRelations relations allPreds) posRelations
+  --   return (arity, negRelations)
+  --   ) (Map.toList posOrgRelationsByArity)
+  -- let negOrgRelationsByArity = Map.fromList negOrgRelationsByArityList
 
-  negAddRelationsByArityList <- mapM (\(arity, posRelations) -> do
-    let allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
-    negRelations <- generateNegRelations posRelations allPreds
-    return (arity, negRelations)
-    ) (Map.toList posAddRelationsByArity)
-  let negAddRelationsByArity = Map.fromList negAddRelationsByArityList
+  -- negAddRelationsByArityList <- mapM (\(arity, posRelations) -> do
+  --   let allPreds = Map.elems (snd (Data.Maybe.fromJust (lookup arity result)))
+  --   negRelations <- mapM (\relations -> generateNegRelations relations allPreds) posRelations
+  --   return (arity, negRelations)
+  --   ) (Map.toList posAddRelationsByArity)
+  -- let negAddRelationsByArity = Map.fromList negAddRelationsByArityList
 
   -- ネガティブデータをCSVファイルに書き込み
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_org_relations_" ++ show arity ++ ".csv")
-    negRelations) (Map.toList negOrgRelationsByArity)
-  mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_add_relations_" ++ show arity ++ ".csv")
-    negRelations) (Map.toList negAddRelationsByArity)
+  -- mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_org_relations_" ++ show arity ++ ".csv")
+  --   negRelations) (Map.toList negOrgRelationsByArity)
+  -- mapM_ (\(arity, negRelations) -> writeRelationsCsv (dataDir </> show indexNum </> "neg_add_relations_" ++ show arity ++ ".csv")
+  --   negRelations) (Map.toList negAddRelationsByArity)
 
-  putStrLn $ "negRelation written to neg_relations" ++ "_" ++ show indexNum ++ ".csv"
-  S.hFlush S.stdout
-  return ((posOrgRelationsByArity, posAddRelationsByArity), (negOrgRelationsByArity, negAddRelationsByArity))
+  -- putStrLn $ "negRelation written to neg_relations" ++ "_" ++ show indexNum ++ ".csv"
+  -- S.hFlush S.stdout
+  return (posOrgRelationsByArity, posAddRelationsByArity)
 
 makeNegData :: Map.Map Int [([Int], Int)] -> Map.Map Int [([Int], Int)] -> IO (Map.Map Int [([Int], Int)], Map.Map Int [([Int], Int)])
 makeNegData posOrgData posAddData = do
@@ -229,8 +234,8 @@ processBatch ps batch = do
                   ) batch
   return results
 
-strToEntityPred :: CP.ParseSetting -> [(T.Text, T.Text)] ->
-  ([DTT.Preterm], [DTT.Preterm], (Map.Map Int [(DTT.Preterm, [DTT.Preterm])], Map.Map Int [(DTT.Preterm, [DTT.Preterm])]))
+strToEntityPred :: CP.ParseSetting -> [(T.Text, T.Text)] -> 
+  ([DTT.Preterm], [DTT.Preterm], ([Map.Map Int [(DTT.Preterm, [DTT.Preterm])]], [Map.Map Int [(DTT.Preterm, [DTT.Preterm])]]))
 strToEntityPred ps strIndexed = unsafePerformIO $ do
   putStrLn $ "~~strToEntityPred~~"
   S.hFlush S.stdout
@@ -254,7 +259,7 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
       nonEmptyPairsList = filter (not . null) pairslist
       chosenlist = choice nonEmptyPairsList
       nodeSRlist = map unzip3 chosenlist
-      nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist
+      nds = concat $ map (\(_, nodes, _) -> nodes) nodeSRlist :: [CCG.Node]
       srs = concat $ map (\(nums, _, srs) -> zip nums srs) nodeSRlist -- :: [(T.Text, DTT.Preterm)]
       sig = foldl L.union [] $ map CP.sig nds
 
@@ -271,7 +276,7 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
       entities = map extractTermPreterm entitiesJudges -- :: [[Preterm]]
       correctPreds = map extractTypePreterm predsJudges -- :: [[Preterm]]
 
-  let transformedPreds = map transformPreterm $ concat correctPreds :: [(DTT.Preterm, [DTT.Preterm])]
+  let transformedPreds = map (map transformPreterm) correctPreds :: [[(DTT.Preterm, [DTT.Preterm])]]
 
   let (sigEntities, sigPreds) = L.partition isEntity [((DTT.Con x), y) | (x, y) <- sig]
 
@@ -295,25 +300,23 @@ strToEntityPred ps strIndexed = unsafePerformIO $ do
 
   -- let synonymMapEntities' = Map.fromListWith (++) [(word, map fst synonyms) | ((word, _), synonyms) <- Map.toList synonymMapEntities] :: Map.Map T.Text [T.Text]
   let synonymMapPreds' = Map.fromListWith (++) [(word, map fst synonyms) | ((word), synonyms) <- Map.toList synonymMapPreds] :: Map.Map T.Text [T.Text]
-  let (orgPreds, addPreds) = replacePredicates synonymMapPreds' transformedPreds
+  let (orgPredsList, addPredsList) = unzip $ map (replacePredicates synonymMapPreds') transformedPreds :: ([[(DTT.Preterm, [DTT.Preterm])]], [[(DTT.Preterm, [DTT.Preterm])]])
   
-  let originalGroupedPreds = groupPredicatesByArity orgPreds
-  let addedGroupedPreds = groupPredicatesByArity addPreds
+  let originalGroupedPredsList = map groupPredicatesByArity orgPredsList
+  let addedGroupedPredsList = map groupPredicatesByArity addPredsList
 
-  putStrLn $ "~~Original Grouped Predicates Count by Arity~~"
-  mapM_ (\(arity, preds) -> putStrLn $ "Arity " ++ show arity ++ ": " ++ show (length preds)) (Map.toList originalGroupedPreds)
-  -- mapM_ print (Map.toList originalGroupedPreds)
-  putStrLn $ "~~Added Grouped Predicates Count by Arity~~"
-  mapM_ (\(arity, preds) -> putStrLn $ "Arity " ++ show arity ++ ": " ++ show (length preds)) (Map.toList addedGroupedPreds)
-  -- mapM_ print (Map.toList addedGroupedPreds)
+  -- putStrLn $ "~~Original Grouped Predicates Count by Arity~~"
+  -- mapM_ (\(arity, preds) -> putStrLn $ "Arity " ++ show arity ++ ": " ++ show (length preds)) (concatMap Map.toList originalGroupedPredsList)
+  -- putStrLn $ "~~Added Grouped Predicates Count by Arity~~"
+  -- mapM_ (\(arity, preds) -> putStrLn $ "Arity " ++ show arity ++ ": " ++ show (length preds)) (concatMap Map.toList addedGroupedPredsList)
 
-  return (allEntities, allPreds, (originalGroupedPreds, addedGroupedPreds))
+  return (allEntities, allPreds, (originalGroupedPredsList, addedGroupedPredsList))
 
 augmentWithSynonyms :: Connection -> [(T.Text, DTT.Preterm)] -> IO (Map.Map T.Text [(T.Text, DTT.Preterm)])
 augmentWithSynonyms conn sigs = do
   synonymMap <- fmap Map.fromList $ mapM (\(word, preterm) -> do
     synonyms <- WN.getSynonyms conn word -- :: [T.Text]
-    let augmented = take 5 $ map (\syn -> (syn, preterm)) synonyms
+    let augmented = take synonym_num $ map (\syn -> (syn, preterm)) synonyms
     return (word, augmented)) sigs
   return synonymMap
 

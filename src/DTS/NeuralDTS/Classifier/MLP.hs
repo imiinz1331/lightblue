@@ -31,7 +31,7 @@ import DTS.NeuralDTS.Classifier
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
-indexNum = 13
+indexNum = 16
 
 data MLPSpec = MLPSpec
   { 
@@ -83,7 +83,7 @@ instance Classifier MLP where
 batchSize :: Int
 batchSize = 256
 numIters :: Integer
-numIters = 100
+numIters = 1000
 myDevice :: Device
 myDevice = Device CUDA 0
 -- myDevice = Device CPU 0
