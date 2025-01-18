@@ -14,7 +14,8 @@ import Control.Monad (when)
 import Data.List (transpose)
 import qualified Data.Binary as B
 import GHC.Generics ( Generic )
-import ML.Exp.Chart (drawLearningCurve)
+import ML.Exp.Chart (drawLearningCurve, drawConfusionMatrix)
+import ML.Exp.Classification (showClassificationReport)
 import Torch
 import Torch.Control (mapAccumM, makeBatch)
 import qualified Torch.Train
@@ -31,7 +32,7 @@ import DTS.NeuralDTS.Classifier
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
-indexNum = 16
+indexNum = 36
 
 data MLPSpec = MLPSpec
   { 
@@ -83,7 +84,7 @@ instance Classifier MLP where
 batchSize :: Int
 batchSize = 256
 numIters :: Integer
-numIters = 1000
+numIters = 10000
 myDevice :: Device
 myDevice = Device CUDA 0
 -- myDevice = Device CPU 0
@@ -114,7 +115,7 @@ trainModel modelName spec trainData arity = do
     error "Training data is empty. Check your input data."
 
   -- 設定値を出力
-  -- putStrLn $ "Model Specification: " ++ show spec
+  putStrLn $ "Model Specification: " ++ show spec
   putStrLn $ "Batch Size: " ++ show batchSize
   putStrLn $ "Number of Iterations: " ++ show numIters
   putStrLn $ "Device: " ++ show myDevice
@@ -126,8 +127,8 @@ trainModel modelName spec trainData arity = do
 
   -- model
   initModel <- toDevice myDevice <$> sample spec
-  let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
-  -- let optimizer = GD
+  let optimizer = GD
+  -- let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
   
   ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
@@ -140,6 +141,7 @@ trainModel modelName spec trainData arity = do
     -- when (epoch `mod` 10 == 0) $ do
     --   putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
     putStrLn $ "Iteration: " ++ show epoch ++ " | Loss: " ++ show batchloss
+    S.hFlush S.stdout
     return (batchTrained, batchloss)
 
   -- モデルを保存
@@ -157,12 +159,13 @@ trainModel modelName spec trainData arity = do
   drawLearningCurve imagePath "Learning Curve" [("", reverse losses)]
   putStrLn $ "drawLearningCurve to " ++ imagePath
 
-testModel :: String -> MLPSpec -> [(([Int], Int), Float)] -> Int -> IO Double
+testModel :: String -> MLPSpec -> [(([Int], Int), Float)] -> Int -> IO (Double, Double, Double, Double)
 testModel modelName spec testRelations arity = do
   putStrLn "testModel"
 
-  loadedModel <- Torch.Train.loadParams spec (modelsDir </> show indexNum </> modelName ++ "_arity" ++ show arity ++ ".model")
-  putStrLn $ "Model loaded from models/" ++ show indexNum ++ "/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
+  let modelDir = modelsDir </> show indexNum
+  loadedModel <- Torch.Train.loadParams spec (modelDir </> modelName ++ "_arity" ++ show arity ++ ".model")
+  putStrLn $ "Model loaded from " ++ modelDir ++ "/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
 
   putStrLn "Testing relations:"
   results <- mapM (\((entities, p), label) -> do
@@ -172,16 +175,42 @@ testModel modelName spec testRelations arity = do
                         let confidence = asValue (fst (maxDim (Dim 1) RemoveDim output)) :: Float
                         let confThreshold = 0.5
                         let prediction = if confidence >= confThreshold then 1 else 0 :: Int
-                        -- putStrLn $ "Test: " ++ show entities ++ ", " ++ show p ++ " -> Prediction: " ++ show prediction ++ " label : " ++ show label ++ " with confidence " ++ show confidence
-                        -- if prediction == 1
-                        --   then putStrLn "Relation holds."
-                        --   else putStrLn "Relation does not hold."
                         return (label, fromIntegral prediction :: Float))
                     testRelations
 
-  -- 精度の計算
-  let correctPredictions = length $ filter (\(label, prediction) -> label == prediction) results
+  -- 精度、再現率、F1スコアの計算
+  let (tp, fp, fn, tn) = foldl (\(tp, fp, fn, tn) (label, prediction) ->
+                                  case (label, prediction) of
+                                    (1.0, 1.0) -> (tp + 1, fp, fn, tn)
+                                    (1.0, 0.0) -> (tp, fp, fn + 1, tn)
+                                    (0.0, 1.0) -> (tp, fp + 1, fn, tn)
+                                    (0.0, 0.0) -> (tp, fp, fn, tn + 1)
+                                    _ -> (tp, fp, fn, tn)
+                                ) (0, 0, 0, 0) results
+
+  let precision = if tp + fp == 0 then 0 else fromIntegral tp / fromIntegral (tp + fp)
+  let recall = if tp + fn == 0 then 0 else fromIntegral tp / fromIntegral (tp + fn)
+  let f1Score = if precision + recall == 0 then 0 else 2 * (precision * recall) / (precision + recall)
+
+  let correctPredictions = tp + tn
   let totalPredictions = length results
   let accuracy = (fromIntegral correctPredictions / fromIntegral totalPredictions) * 100 :: Double
+
   putStrLn $ "Accuracy: " ++ show accuracy ++ "%"
-  return accuracy
+  putStrLn $ "Precision: " ++ show precision
+  putStrLn $ "Recall: " ++ show recall
+  putStrLn $ "F1 Score: " ++ show f1Score
+
+  -- -- 分類レポートの生成
+  -- let imageDir = imagesDir </> show indexNum
+  -- let classificationReport = showClassificationReport 2 (zip (map snd results) (map fst results))
+  -- T.putStr classificationReport
+  -- let classificationReportFileName = imageDir </> modelName ++ "_classification_report_" ++ show arity ++ ".txt"
+  -- B.writeFile classificationReportFileName (E.encodeUtf8 classificationReport)
+
+  -- -- 混同行列の描画
+  -- let confusionMatrixFileName = imageDir </> modelName ++ "_confusion_matrix_" ++ show arity ++ ".png"
+  -- drawConfusionMatrix confusionMatrixFileName 2 (zip (map snd results) (map fst results))
+  -- putStrLn $ "Confusion matrix saved to " ++ confusionMatrixFileName
+
+  return (accuracy, precision, recall, f1Score)

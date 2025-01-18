@@ -18,6 +18,7 @@ import Prelude hiding   (tanh)
 import qualified System.IO as S
 import System.IO.Unsafe (unsafePerformIO)
 import System.Directory (createDirectoryIfMissing)
+import System.Mem (performGC)
 
 import Torch
 import Debug.Trace as D
@@ -37,7 +38,7 @@ import qualified Data.Type.Bool as D
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
-indexNum = 11
+indexNum = 36
 
 data SNTNSpec = SNTNSpec {
   entity_num_embed :: Int
@@ -120,9 +121,9 @@ instance Classifier SNTN where
 --------------------------------------------------------------------------------
 
 batchSize :: Int
-batchSize = 128
+batchSize = 256
 numIters :: Integer
-numIters = 1000
+numIters = 10000
 myDevice :: Device
 myDevice = Device CUDA 0
 mode :: RuntimeMode
@@ -164,14 +165,15 @@ trainModel modelName spec trainData arity = do
 
   -- model
   initModel <- toDevice myDevice <$> sample spec
-  let optimizer = GD
---   let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
+  -- let optimizer = GD
+  let optimizer = mkAdam 0 0.9 0.999 (flattenParameters initModel)
   
   ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
       \batch (model, opt) -> do
         loss <- calculateLoss model batch
         updated <- runStep model opt loss lr
+        performGC
         return (updated, asValue loss::Float)
     -- batch の長さでlossをわる
     let batchloss = sum batchLosses / (fromIntegral (length batchLosses)::Float)
@@ -194,7 +196,7 @@ trainModel modelName spec trainData arity = do
   drawLearningCurve imagePath "Learning Curve" [("", reverse losses)]
   putStrLn $ "drawLearningCurve to " ++ imagePath
 
-testModel :: String -> SNTNSpec -> [(([Int], Int), Float)] -> Int -> IO Double
+testModel :: String -> SNTNSpec -> [(([Int], Int), Float)] -> Int -> IO (Double, Double, Double, Double)
 testModel modelName spec testRelations arity = do
   putStrLn "testModel"
 
@@ -216,9 +218,27 @@ testModel modelName spec testRelations arity = do
                         return (label, fromIntegral prediction :: Float))
                     testRelations
 
-  -- 精度の計算
-  let correctPredictions = length $ filter (\(label, prediction) -> label == prediction) results
+    -- 精度、再現率、F1スコアの計算
+  let (tp, fp, fn, tn) = foldl (\(tp, fp, fn, tn) (label, prediction) ->
+                                  case (label, prediction) of
+                                    (1.0, 1.0) -> (tp + 1, fp, fn, tn)
+                                    (1.0, 0.0) -> (tp, fp, fn + 1, tn)
+                                    (0.0, 1.0) -> (tp, fp + 1, fn, tn)
+                                    (0.0, 0.0) -> (tp, fp, fn, tn + 1)
+                                    _ -> (tp, fp, fn, tn)
+                                ) (0, 0, 0, 0) results
+
+  let precision = if tp + fp == 0 then 0 else fromIntegral tp / fromIntegral (tp + fp)
+  let recall = if tp + fn == 0 then 0 else fromIntegral tp / fromIntegral (tp + fn)
+  let f1Score = if precision + recall == 0 then 0 else 2 * (precision * recall) / (precision + recall)
+
+  let correctPredictions = tp + tn
   let totalPredictions = length results
   let accuracy = (fromIntegral correctPredictions / fromIntegral totalPredictions) * 100 :: Double
+
   putStrLn $ "Accuracy: " ++ show accuracy ++ "%"
-  return accuracy
+  putStrLn $ "Precision: " ++ show precision
+  putStrLn $ "Recall: " ++ show recall
+  putStrLn $ "F1 Score: " ++ show f1Score
+
+  return (accuracy, precision, recall, f1Score)

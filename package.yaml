@@ -52,6 +52,7 @@ dependencies:
   - async
   - random-shuffle
   - sqlite-simple
+  - regex-tdfa
 
 library:
   source-dirs: src
