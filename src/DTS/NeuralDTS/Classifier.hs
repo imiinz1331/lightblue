@@ -10,6 +10,9 @@ import Data.Binary
 class Classifier n where
   classify :: n -> RuntimeMode -> Tensor -> [Tensor] -> Tensor
 
+class Classifier2 n where
+  classify2 :: n -> RuntimeMode -> Tensor -> [Tensor] -> [[Int]] -> Tensor
+
 deriving instance Generic DeviceType
 deriving instance Binary DeviceType
 deriving instance Generic Device

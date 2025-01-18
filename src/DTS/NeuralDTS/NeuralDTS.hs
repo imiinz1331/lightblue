@@ -11,6 +11,7 @@ import qualified Data.Text.Lazy as T      --text
 import qualified Data.Text.Lazy.IO as T   --text
 import qualified Data.List as L           --base
 import qualified Data.Map as Map
+import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import qualified Interface.Text as T
 import qualified System.IO as S
@@ -32,12 +33,14 @@ import qualified DTS.NeuralDTS.Classifier.MLP as MLP (trainModel, testModel, MLP
 import qualified DTS.NeuralDTS.Classifier.SocherNTN as SNTN (trainModel, testModel, SNTNSpec(..))
 -- import qualified DTS.NeuralDTS.Classifier.DingNTN as DNTN (trainModel, testModel, DNTNSpec(..))
 import qualified DTS.NeuralDTS.Classifier.TuckER as TuckER (trainModel, testModel, TuckERSpec(..))
+import qualified DTS.NeuralDTS.Classifier.MLP2 as MLP2 (trainModel, testModel, MLPSpec(..))
+import Control.Monad.RWS (MonadState(put))
 
 inputsDir = "src/DTS/NeuralDTS/inputs"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
 modelsDir = "src/DTS/NeuralDTS/models"
-indexNum = 36
+indexNum = 37
 
 testNeuralDTS :: IO()
 testNeuralDTS = do
@@ -46,7 +49,7 @@ testNeuralDTS = do
   -- posStr <- readCsv (inputsDir ++ "/JPWordNet.csv")
   posStr <- readCsv (inputsDir ++ "/yasashii_japanese.csv")
   -- posStr <- readCsv (inputsDir ++ "/john_yasashii_japanese.csv")
-  let posStr2 = take 1000 posStr
+  let posStr2 = take 10 posStr
   -- let posStr2 = take 100 (drop 900 posStr)
 
   lr <- L.lexicalResourceBuilder Juman.KWJA
@@ -94,7 +97,8 @@ checkAccuracy ps str = do
     ---- 学習とテスト
     let posOrgRelationsForArity = Map.findWithDefault [] arity posOrgRelations -- :: [[([Int], Int)]]
     let posAddRelationsForArity = Map.findWithDefault [] arity posAddRelations -- :: [[([Int], Int)]]
-    scores <- forM [1..2] $ \i -> trainAndTest i arity posOrgRelationsForArity posAddRelationsForArity
+    -- scores <- forM [1..2] $ \i -> trainAndTest i arity posOrgRelationsForArity posAddRelationsForArity
+    scores <- forM [1..2] $ \i -> trainAndTest2 i arity posOrgRelationsForArity posAddRelationsForArity
     let (accuracies, precisions, recalls, f1Scores) = L.unzip4 scores
     let averageAccuracy = sum accuracies / fromIntegral (length accuracies)
     let averagePrecision = sum precisions / fromIntegral (length precisions)
@@ -108,6 +112,118 @@ checkAccuracy ps str = do
     ---- テストのみ
     -- accuracy <- testOnly 1 arity posOrgRelationsForArity posAddRelationsForArity
     -- putStrLn $ "Accuracy for arity " ++ show arity ++ ": " ++ show accuracy
+
+trainAndTest2 :: Int -> Int -> [[([Int], Int)]] -> [[([Int], Int)]] -> IO (Double, Double, Double, Double)
+trainAndTest2 fold arity posOrgRelations posAddRelations = do
+  -- 1. 各意味表示からtest候補を選ぶ．残りがpos training data
+  let (trainPosData, testPosData) = unzip $ map splitRelations posOrgRelations
+  let flatTrainPosData = concat trainPosData :: [([Int], Int)]
+  let flatTestPosData = concat testPosData :: [([Int], Int)]
+  putStrLn $ "Train Data Sizes: " ++ show (length flatTrainPosData)
+  putStrLn $ "Test PosData Sizes: " ++ show (length flatTestPosData)
+  
+  -- 2. エンティティ辞書を読み込み、エンティティを変換
+  entityDict <- readEntityDict (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv") -- :: Map.Map Int String
+  let parsedEntityDict = Map.map parseElement entityDict
+  let convertEntity entity = Map.findWithDefault (entity, []) entity parsedEntityDict
+
+  -- 空のπシーケンスをフィルタリングする関数
+  let filterEmptyPi entities = 
+        let filtered = filter (\(_, piSeq) -> null piSeq) entities
+        in if not (null filtered)
+           then trace ("Filtered entities: " ++ show filtered) False
+           else True
+
+  -- エンティティを変換し、フィルタリングを行う
+  let convertAndFilter (xs, y) = 
+        let converted = map convertEntity xs
+        in if filterEmptyPi converted then Just (converted, y) else Nothing
+
+  let filteredTrainPosData = mapMaybe convertAndFilter flatTrainPosData :: [([(Int, [Int])], Int)]
+      filteredTestPosData = mapMaybe convertAndFilter flatTestPosData :: [([(Int, [Int])], Int)]
+
+  putStrLn $ "Filtered Train Data Sizes: " ++ show (length filteredTrainPosData)
+  putStrLn $ "Filtered Test Data Sizes: " ++ show (length filteredTestPosData)
+
+  shuffledTrainPosData <- shuffleM filteredTrainPosData -- no add 
+  shuffledTestPosData <- shuffleM filteredTestPosData
+
+  -- 3. 2.に含まれないデータをneg dataとして生成
+  let allEntities = concatMap fst flatTrainPosData -- no add :: [Int]
+  let allPreds = map snd flatTrainPosData -- no add
+  let existingRelations = Set.fromList (shuffledTrainPosData ++ shuffledTestPosData)
+  negData <- generateNegRelations4 shuffledTrainPosData allPreds existingRelations (length shuffledTrainPosData + length shuffledTestPosData)
+
+  -- 4. 3.をneg train dataとneg test dataに分割する
+  let (trainNegData, testNegData) = splitAt (length shuffledTrainPosData) negData
+  putStrLn $ "Train NegData Sizes:" ++ show (length trainNegData)
+  putStrLn $ "Test NegData Sizes:" ++ show (length testNegData)
+
+  shuffledTrainNegData <- shuffleM trainNegData
+  shuffledTestNegData <- shuffleM testNegData
+
+  writeRelationsCsv2 (dataDir </> show indexNum </> "train_pos_" ++ show arity ++ ".csv") shuffledTrainPosData
+  writeRelationsCsv2 (dataDir </> show indexNum </> "train_neg_" ++ show arity ++ ".csv") shuffledTrainNegData
+  writeRelationsCsv2 (dataDir </> show indexNum </> "test_pos_" ++ show arity ++ ".csv") shuffledTestPosData
+  writeRelationsCsv2 (dataDir </> show indexNum </> "test_neg_" ++ show arity ++ ".csv") shuffledTestNegData
+
+  -- 5. 追加した pos training data と neg training dataがtraining data、1.のpos test dataと4.のneg test dataがtest data
+  let trainPosData' = map (\(xs, y) -> ((xs, y), 1.0)) shuffledTrainPosData :: [(([(Int, [Int])], Int), Float)]
+  let trainNegData' = map (\(xs, y) -> ((xs, y), 0.0)) shuffledTrainNegData
+  let trainData = trainPosData' ++ trainNegData' :: [(([(Int, [Int])], Int), Float)]
+  let testPosData' = map (\(xs, y) -> ((xs, y), 1.0)) shuffledTestPosData
+  let testNegData' = map (\(xs, y) -> ((xs, y), 0.0)) shuffledTestNegData
+  let testData = testPosData' ++ testNegData' :: [(([(Int, [Int])], Int), Float)]
+
+  genTrain <- newStdGen
+  genTest <- newStdGen
+  let shuffledTrainData = shuffle' trainData (length trainData) genTrain
+  let shuffledTestData = shuffle' testData (length testData) genTest
+
+  let entities1 = concatMap fst filteredTrainPosData
+  let entities2 = concatMap fst filteredTestPosData
+  let uniqueEntities = Set.toList $ Set.fromList (entities1 ++ entities2)
+  putStrLn $ "Unique entities: " ++ show (length uniqueEntities)
+
+  let entityCount = length uniqueEntities
+  -- entityCount <- Utils.getLineCount (dataDir </> show indexNum </> "entity_dict_" ++ show arity ++ ".csv")
+  relationCount <- Utils.getLineCount (dataDir </> show indexNum </> "predicate_dict_" ++ show arity ++ ".csv")
+  putStrLn $ "entityCount: " ++ show entityCount
+  putStrLn $ "relationCount: " ++ show relationCount
+  S.hFlush S.stdout
+
+  -- MLPを使用する場合
+  let mlpSpec = MLP2.MLPSpec {
+            entity_num_embed = entityCount,
+            relation_num_embed = relationCount,
+            entity_features = 256,
+            relation_features = 256,
+            hidden_dim1 = 256,
+            hidden_dim2 = 32,
+            output_feature = 1,
+            arity = arity}
+  let modelName = "MLP_arity_" ++ show arity ++ "_fold_" ++ show fold
+  MLP2.trainModel modelName mlpSpec shuffledTrainData arity
+  (accuracy, precision, recall, f1Score) <- MLP2.testModel modelName mlpSpec shuffledTestData arity
+  return (accuracy, precision, recall, f1Score)
+  -- return (0.0, 0.0, 0.0, 0.0)
+
+parseElement :: String -> (Int, [Int])
+parseElement str = 
+  let regex = "S([0-9]+)" :: String
+      piRegex = "π([12])" :: String
+      sMatch = str =~ regex :: [[String]]
+      piMatches = str =~ piRegex :: [[String]]
+      sNumber = if not (null sMatch) then read (sMatch !! 0 !! 1) :: Int else 0
+      piSequence = map (\m -> read (m !! 1) :: Int) piMatches
+  in (sNumber, piSequence)
+
+writeRelationsCsv2 :: FilePath -> [([(Int, [Int])], Int)] -> IO ()
+writeRelationsCsv2 path relations = S.withFile path S.WriteMode $ \h -> do
+  let formatEntity (entity, piSeq) = show entity ++ ":" ++ L.intercalate "-" (map show piSeq)
+  let formatRelation (entities, p) = L.intercalate "," (map formatEntity entities ++ [show p])
+  let content = unlines $ map formatRelation relations
+  S.hPutStr h content
   
 trainAndTest :: Int -> Int -> [[([Int], Int)]] -> [[([Int], Int)]] -> IO (Double, Double, Double, Double)
 trainAndTest fold arity posOrgRelations posAddRelations = do
@@ -131,9 +247,9 @@ trainAndTest fold arity posOrgRelations posAddRelations = do
   let allPreds = map snd addedTrainPosData
   -- let allEntities = concatMap fst flatTrainPosData -- no add
   -- let allPreds = map snd flatTrainPosData -- no add
-  let existingRelations = Set.fromList (shuffledTrainPosData ++ flatTestPosData)
+  let existingRelations = Set.fromList (shuffledTrainPosData ++ shuffledTestPosData)
   -- negData <- generateNegRelations2 shuffledTrainPosData allPreds existingRelations (length shuffledTrainPosData + length flatTestPosData)
-  negData <- generateNegRelations2 shuffledTrainPosData allEntities allPreds existingRelations (length shuffledTrainPosData + length flatTestPosData)
+  negData <- generateNegRelations2 shuffledTrainPosData allEntities allPreds existingRelations (length shuffledTrainPosData + length shuffledTestPosData)
 
   -- 4. 3.をneg train dataとneg test dataに分割する
   let (trainNegData, testNegData) = splitAt (length shuffledTrainPosData) negData
@@ -168,28 +284,28 @@ trainAndTest fold arity posOrgRelations posAddRelations = do
   S.hFlush S.stdout
 
   -- MLPを使用する場合
-  -- let mlpSpec = MLP.MLPSpec {
-  --           entity_num_embed = entityCount,
-  --           relation_num_embed = relationCount,
-  --           entity_features = 256,
-  --           relation_features = 256,
-  --           hidden_dim1 = 256,
-  --           hidden_dim2 = 32,
-  --           output_feature = 1,
-  --           arity = arity}
-  -- let modelName = "MLP_arity_" ++ show arity ++ "_fold_" ++ show fold
-  -- MLP.trainModel modelName mlpSpec shuffledTrainData arity
-  -- (accuracy, precision, recall, f1Score) <- MLP.testModel modelName mlpSpec shuffledTestData arity
+  let mlpSpec = MLP.MLPSpec {
+            entity_num_embed = entityCount,
+            relation_num_embed = relationCount,
+            entity_features = 256,
+            relation_features = 256,
+            hidden_dim1 = 256,
+            hidden_dim2 = 32,
+            output_feature = 1,
+            arity = arity}
+  let modelName = "MLP_arity_" ++ show arity ++ "_fold_" ++ show fold
+  MLP.trainModel modelName mlpSpec shuffledTrainData arity
+  (accuracy, precision, recall, f1Score) <- MLP.testModel modelName mlpSpec shuffledTestData arity
 
   -- Socher NTNを使用する場合 (TODO : n=2の場合以外も対応する)
-  let sntnSpec = SNTN.SNTNSpec { 
-    entity_num_embed = entityCount, 
-    relation_num_embed = relationCount, 
-    embedding_features = 128, 
-    output_dim = 1 }
-  let modelName = "SNTN_arity_" ++ show arity ++ "_fold_" ++ show fold
-  SNTN.trainModel modelName sntnSpec shuffledTrainData arity
-  (accuracy, precision, recall, f1Score) <- SNTN.testModel modelName sntnSpec shuffledTestData arity
+  -- let sntnSpec = SNTN.SNTNSpec { 
+  --   entity_num_embed = entityCount, 
+  --   relation_num_embed = relationCount, 
+  --   embedding_features = 128, 
+  --   output_dim = 1 }
+  -- let modelName = "SNTN_arity_" ++ show arity ++ "_fold_" ++ show fold
+  -- SNTN.trainModel modelName sntnSpec shuffledTrainData arity
+  -- (accuracy, precision, recall, f1Score) <- SNTN.testModel modelName sntnSpec shuffledTestData arity
 
   -- Ding NTNを使用する場合 (TODO : n=2の場合以外も対応する)
   -- let dntnSpec = DNTN.DNTNSpec { 
@@ -289,18 +405,31 @@ splitRelations relations = unsafePerformIO $ do
         (selected:rest) -> return (before ++ rest, [selected])
 
 -- ネガティブデータを生成する関数
--- generateNegRelations2 :: [([Int], Int)] -> [Int] -> Set.Set ([Int], Int) -> Int -> IO [([Int], Int)]
--- generateNegRelations2 posRelations allPreds existingNegRelations numNegRelations = do
---   let posSet = Set.fromList posRelations
---   let generateOneNegRelation = do
---         (entities, pred) <- randomRIO (0, length posRelations - 1) >>= \i -> return (posRelations !! i)
---         newPred <- randomRIO (0, length allPreds - 1) >>= \i -> return (allPreds !! i)
---         let negRelation = (entities, newPred)
---         if Set.member negRelation posSet || Set.member negRelation existingNegRelations
---           then generateOneNegRelation
---           else return negRelation
---   negRelations <- replicateM numNegRelations generateOneNegRelation
---   return negRelations
+generateNegRelations4 :: [([(Int, [Int])], Int)] -> [Int] -> Set.Set ([(Int, [Int])], Int) -> Int -> IO [([(Int, [Int])], Int)]
+generateNegRelations4 posRelations allPreds existingNegRelations numNegRelations = do
+  let posSet = Set.fromList posRelations
+  let generateOneNegRelation = do
+        (entities, pred) <- randomRIO (0, length posRelations - 1) >>= \i -> return (posRelations !! i)
+        newPred <- randomRIO (0, length allPreds - 1) >>= \i -> return (allPreds !! i)
+        let negRelation = (entities, newPred)
+        if Set.member negRelation posSet || Set.member negRelation existingNegRelations
+          then generateOneNegRelation
+          else return negRelation
+  negRelations <- replicateM numNegRelations generateOneNegRelation
+  return negRelations
+
+generateNegRelations3 :: [([Int], Int)] -> [Int] -> Set.Set ([Int], Int) -> Int -> IO [([Int], Int)]
+generateNegRelations3 posRelations allPreds existingNegRelations numNegRelations = do
+  let posSet = Set.fromList posRelations
+  let generateOneNegRelation = do
+        (entities, pred) <- randomRIO (0, length posRelations - 1) >>= \i -> return (posRelations !! i)
+        newPred <- randomRIO (0, length allPreds - 1) >>= \i -> return (allPreds !! i)
+        let negRelation = (entities, newPred)
+        if Set.member negRelation posSet || Set.member negRelation existingNegRelations
+          then generateOneNegRelation
+          else return negRelation
+  negRelations <- replicateM numNegRelations generateOneNegRelation
+  return negRelations
 
 generateNegRelations2 :: [([Int], Int)] -> [Int] -> [Int] -> Set.Set ([Int], Int) -> Int -> IO [([Int], Int)]
 generateNegRelations2 posRelations allEntities allPreds existingNegRelations numNegRelations = do
