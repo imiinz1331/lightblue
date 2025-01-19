@@ -11,7 +11,7 @@ module DTS.NeuralDTS.Classifier.MLP2 (
   ) where
 
 import Control.Monad (when)
-import Data.List (transpose)
+import Data.List (transpose, foldl')
 import qualified Data.Binary as B
 import GHC.Generics ( Generic )
 import ML.Exp.Chart (drawLearningCurve, drawConfusionMatrix)
@@ -32,7 +32,7 @@ import DTS.NeuralDTS.Classifier
 modelsDir = "src/DTS/NeuralDTS/models"
 dataDir = "src/DTS/NeuralDTS/dataSet"
 imagesDir = "src/DTS/NeuralDTS/images"
-indexNum = 37
+indexNum = 39
 
 data MLPSpec = MLPSpec
   { 
@@ -60,50 +60,60 @@ data MLP = MLP
 instance Show MLP where
   show MLP {..} = show entity_emb ++ "\n" ++ show relation_emb ++ "\n" ++ show linear_layer1  ++ "\n"++ show linear_layer2 ++ "\n"++ show linear_layer3 ++ "\n" ++ show pi1_matrix ++ "\n" ++ show pi2_matrix ++ "\n"
 
+-- -- Xavier初期化関数
+-- xavierInit :: Int -> Int -> IO Tensor
+-- xavierInit fanIn fanOut = do
+--   let std = Torch.sqrt (2.0 / fromIntegral (fanIn + fanOut))
+--   randnIO' [fanIn, fanOut] >>= \t -> return (t / asTensor std)
+
+-- instance Randomizable MLPSpec MLP where
+--   sample MLPSpec {..} = MLP
+--     <$> (makeIndependent =<< xavierInit entity_num_embed entity_features)
+--     <*> (makeIndependent =<< xavierInit relation_num_embed relation_features)
+--     <*> sample (LinearSpec (entity_features * arity + relation_features) hidden_dim1)
+--     <*> sample (LinearSpec hidden_dim1 hidden_dim2)
+--     <*> sample (LinearSpec hidden_dim2 output_feature)
+--     <*> (makeIndependent =<< xavierInit entity_features entity_features) -- pi1_matrix
+--     <*> (makeIndependent =<< xavierInit entity_features entity_features) -- pi2_matrix
+
 instance Randomizable MLPSpec MLP where
   sample MLPSpec {..} = MLP
     <$> (makeIndependent =<< randnIO' [entity_num_embed, entity_features])
     <*> (makeIndependent =<< randnIO' [relation_num_embed, relation_features])
-    <*> sample (LinearSpec (entity_features * arity + relation_features) hidden_dim1) -- 最初の線形層の入力サイズ 160
+    <*> sample (LinearSpec (entity_features * arity + relation_features) hidden_dim1)
     <*> sample (LinearSpec hidden_dim1 hidden_dim2)
     <*> sample (LinearSpec hidden_dim2 output_feature)
     <*> (makeIndependent =<< randnIO' [entity_features, entity_features]) -- pi1_matrix
     <*> (makeIndependent =<< randnIO' [entity_features, entity_features]) -- pi2_matrix
 
 instance Classifier2 MLP where
-  classify2 :: MLP -> RuntimeMode -> Tensor -> [Tensor] -> [[Int]] -> Tensor
+  classify2 :: MLP -> RuntimeMode -> Tensor -> [Tensor] -> [[[Int]]] -> Tensor
   classify2 MLP {..} _ predTensor entitiesTensor piSequences =
     let pred2 = embedding' (toDependent relation_emb) predTensor
         entities = map (embedding' (toDependent entity_emb)) entitiesTensor :: [Tensor]
         
-        applyPi :: Tensor -> Int -> Tensor
-        applyPi entity piValue = 
-          let matrix = case piValue of
-                        1 -> toDependent pi1_matrix
-                        2 -> toDependent pi2_matrix
-              result = matmul entity matrix
-              resultValue = asValue result :: [[Float]] -- Tensorから値を取得
-          in if Prelude.any isNaN (concat resultValue)
-            then error $ "NaN detected in applyPi: " ++ " and entity: " ++ show entity ++ " and piValue: " ++ show piValue
-            else result
-        processEntity :: (Tensor, [Int]) -> Tensor
-        processEntity (entity, piSequence) = foldl applyPi entity piSequence
+        applyPi :: Tensor -> [Int] -> Tensor
+        applyPi entity piValues = 
+          foldl' (\acc piValue -> 
+            let matrix = case piValue of
+                          1 -> toDependent pi1_matrix
+                          2 -> toDependent pi2_matrix
+                result = matmul acc matrix :: Tensor
+                resultValue = asValue result :: [[Float]] -- Tensorから値を取得
+            in if Prelude.any isNaN (concat resultValue)
+              then error $ "NaN detected in applyPi: " ++ " and entity: " ++ show entity ++ " and result: " ++ show (concat resultValue)
+              else result) entity piValues
         
-        entitiesWithPi = map processEntity (zip entities piSequences)
-
-        -- パディングを追加してテンソルの形状を揃える
-        -- maxLength = maximum (map (\t -> shape t !! 1) entitiesWithPi)
-        -- padTensor t = if shape t !! 1 < maxLength
-        --               then cat (Dim 1) [t, zeros' [shape t !! 0, maxLength - shape t !! 1]]
-        --               else t
-        -- paddedEntitiesWithPi = map padTensor entitiesWithPi
-        -- input = cat (Dim 1) (pred2 : paddedEntitiesWithPi)
-
+        processEntity :: Tensor -> [[Int]] -> Tensor
+        processEntity entity piSequence = foldl' applyPi entity piSequence
+        
+        -- 各エンティティに対してpiSequencesを適用
+        entitiesWithPi = zipWith processEntity entities piSequences
         input = cat (Dim 1) (pred2 : entitiesWithPi)
         nonlinearity = Torch.sigmoid
     in if Prelude.any isNaN (asValue input :: [Float])
-       then error $ "NaN detected in input: " ++ show input
-       else nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
+      then error $ "NaN detected in input: " ++ show input
+      else nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
             $ linear linear_layer1 $ input
 
 --------------------------------------------------------------------------------
@@ -111,12 +121,12 @@ instance Classifier2 MLP where
 --------------------------------------------------------------------------------
 
 batchSize :: Int
-batchSize = 16
+batchSize = 256
 numIters :: Integer
-numIters = 1
+numIters = 10
 myDevice :: Device
--- myDevice = Device CUDA 0
-myDevice = Device CPU 0
+myDevice = Device CUDA 0
+-- myDevice = Device CPU 0
 mode :: RuntimeMode
 mode = Train
 lr :: LearningRate
@@ -127,17 +137,18 @@ calculateLoss model dataSet = do
   let (inputs, label) = unzip dataSet
       (entities, preds) = unzip inputs
       entityIndices = map (map fst) entities :: [[Int]]
-      piSequences = concatMap (map snd) entities :: [[Int]]
-  print $ "entityIndices: " ++ show entityIndices
+      -- piSequences = concatMap (map snd) entities -- :: [[[Int]]]
+      piSequences = map (map snd) entities 
+  -- print $ "entityIndices: " ++ show entityIndices
   -- print $ "piSequences: " ++ show piSequences
-  let entityTensors = map (toDevice myDevice . asTensor) (Data.List.transpose entityIndices)
-  let predTensors = toDevice myDevice $ asTensor (preds :: [Int])
+  let entityTensors = map (toDevice myDevice . asTensor) (Data.List.transpose entityIndices) :: [Tensor]
+  let predTensors = toDevice myDevice $ asTensor (preds :: [Int]) :: Tensor
   let teachers = toDevice myDevice $ asTensor (label :: [Float]) :: Tensor
-  print $ "entityTensors 1: " ++ show entityTensors
-  print $ "predTensors 1: " ++ show predTensors
-  print $ "piSequences 1: " ++ show piSequences
+  -- print $ "entityTensors 1: " ++ show entityTensors
+  -- print $ "predTensors 1: " ++ show predTensors
+  -- print $ "piSequences 1: " ++ show piSequences
   let prediction = squeezeAll $ classify2 model mode predTensors entityTensors piSequences
-  putStrLn $ "predictionTensor 1: " ++ show (prediction)
+  -- putStrLn $ "predictionTensor 1: " ++ show (prediction)
   return $ binaryCrossEntropyLoss' teachers prediction
 
 trainModel :: String -> MLPSpec -> [(([(Int, [Int])], Int), Float)] -> Int -> IO ()
@@ -168,8 +179,12 @@ trainModel modelName spec trainData arity = do
   ((trainedModel, _), losses) <- mapAccumM [1..numIters] (initModel, optimizer) $ \epoch (model', opt') -> do
     (batchTrained@(batchModel, _), batchLosses) <- mapAccumM batchedTrainSet (model', opt') $ 
       \batch (model, opt) -> do
+        -- putStrLn "Parameters before update:"
+        -- printParameters (flattenParameters model)
         loss <- calculateLoss model batch
         updated <- runStep model opt loss lr
+        -- putStrLn "Parameters after update:"
+        -- printParameters (flattenParameters $ fst updated)
         return (updated, asValue loss::Float)
     -- batch の長さでlossをわる
     let batchloss = sum batchLosses / (fromIntegral (length batchLosses)::Float)
@@ -194,6 +209,11 @@ trainModel modelName spec trainData arity = do
   drawLearningCurve imagePath "Learning Curve" [("", reverse losses)]
   putStrLn $ "drawLearningCurve to " ++ imagePath
 
+printParameters :: [Parameter] -> IO ()
+printParameters params = do
+  let tensors = map toDependent params
+  mapM_ (\tensor -> putStrLn $ show (asValue tensor :: [[Float]])) tensors
+
 testModel :: String -> MLPSpec -> [(([(Int, [Int])], Int), Float)] -> Int -> IO (Double, Double, Double, Double)
 testModel modelName spec testRelations arity = do
   putStrLn "testModel"
@@ -202,16 +222,21 @@ testModel modelName spec testRelations arity = do
   loadedModel <- Torch.Train.loadParams spec (modelDir </> modelName ++ "_arity" ++ show arity ++ ".model")
   putStrLn $ "Model loaded from " ++ modelDir ++ "/" ++ modelName ++ "_arity" ++ show arity ++ ".model"
 
+  -- putStrLn "Loaded model parameters:"
+  -- printParameters (flattenParameters loadedModel)
+
   putStrLn "Testing relations:"
   results <- mapM (\((entities, p), label) -> do
                         let entityIndices = map fst entities :: [Int]
                         let piSequences = map snd entities :: [[Int]]
-                        print $ "entityIndices 2: " ++ show entityIndices
-                        print $ "piSequences 2: " ++ show piSequences
-                        let entityTensors = map (\idx -> toDevice myDevice $ asTensor ([fromIntegral idx :: Int] :: [Int])) entityIndices
-                        print $ "entityTensors 2: " ++ show entityTensors
+                        -- print $ "entityIndices 2: " ++ show entityIndices
+                        -- print $ "piSequences 2: " ++ show piSequences
+                        let entityTensors = map (\idx -> toDevice myDevice $ asTensor ([fromIntegral idx :: Int] :: [Int])) entityIndices :: [Tensor]
+                        -- print $ "entityTensors 2: " ++ show entityTensors
                         let rTensor = toDevice myDevice $ asTensor ([fromIntegral p :: Int] :: [Int])
-                        let output = classify2 loadedModel Eval rTensor entityTensors piSequences
+                        -- let output = classify2 loadedModel Eval rTensor entityTensors piSequences
+                        let piSequences' = map (map (:[])) piSequences :: [[[Int]]] -- ここでpiSequencesを[[[Int]]]に変換
+                        let output = classify2 loadedModel Eval rTensor entityTensors piSequences'
                         let confidence = asValue (fst (maxDim (Dim 1) RemoveDim output)) :: Float
                         let confThreshold = 0.5
                         let prediction = if confidence >= confThreshold then 1 else 0 :: Int
