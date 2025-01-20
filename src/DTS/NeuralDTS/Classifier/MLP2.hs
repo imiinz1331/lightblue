@@ -83,8 +83,8 @@ instance Randomizable MLPSpec MLP where
     <*> sample (LinearSpec (entity_features * arity + relation_features) hidden_dim1)
     <*> sample (LinearSpec hidden_dim1 hidden_dim2)
     <*> sample (LinearSpec hidden_dim2 output_feature)
-    <*> (makeIndependent =<< randnIO' [entity_features, entity_features]) -- pi1_matrix
-    <*> (makeIndependent =<< randnIO' [entity_features, entity_features]) -- pi2_matrix
+    <*> (makeIndependent =<< randnIO' [entity_features]) -- pi1_matrix
+    <*> (makeIndependent =<< randnIO' [entity_features]) -- pi2_matrix
 
 instance Classifier2 MLP where
   classify2 :: MLP -> RuntimeMode -> Tensor -> [Tensor] -> [[[Int]]] -> Tensor
@@ -96,25 +96,30 @@ instance Classifier2 MLP where
         applyPi entity piValues = 
           foldl' (\acc piValue -> 
             let matrix = case piValue of
-                          1 -> toDependent pi1_matrix
-                          2 -> toDependent pi2_matrix
-                result = matmul acc matrix :: Tensor
-                resultValue = asValue result :: [[Float]] -- Tensorから値を取得
+                          1 -> (toDependent pi1_matrix) -- 形状: [entity_features]
+                          2 -> (toDependent pi2_matrix) -- 形状: [entity_features]
+                acc' = acc * matrix -- スカラーとベクトルの要素ごとの積
+                resultValue = asValue acc' :: [[Float]]
             in if Prelude.any isNaN (concat resultValue)
-              then error $ "NaN detected in applyPi: " ++ " and entity: " ++ show entity ++ " and result: " ++ show (concat resultValue)
-              else result) entity piValues
+              then error $ "NaN detected in applyPi:\n" ++
+                           "acc: " ++ show acc ++ "\n" ++
+                           "pi1_matrix: " ++ show pi1_matrix ++ "\n" ++
+                           "result: " ++ show (concat resultValue)
+              else acc') entity piValues
         
         processEntity :: Tensor -> [[Int]] -> Tensor
-        processEntity entity piSequence = foldl' applyPi entity piSequence
+        processEntity entity piSequence = 
+          foldl' applyPi entity piSequence
         
         -- 各エンティティに対してpiSequencesを適用
         entitiesWithPi = zipWith processEntity entities piSequences
         input = cat (Dim 1) (pred2 : entitiesWithPi)
         nonlinearity = Torch.sigmoid
-    in if Prelude.any isNaN (asValue input :: [Float])
-      then error $ "NaN detected in input: " ++ show input
-      else nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
+        output = nonlinearity $ linear linear_layer3 $ nonlinearity $ linear linear_layer2 $ nonlinearity 
             $ linear linear_layer1 $ input
+    in if Prelude.any isNaN (asValue output :: [Float])
+      then error $ "NaN detected in output: " ++ show output
+      else output
 
 --------------------------------------------------------------------------------
 -- Training code
@@ -123,7 +128,7 @@ instance Classifier2 MLP where
 batchSize :: Int
 batchSize = 256
 numIters :: Integer
-numIters = 10
+numIters = 100
 myDevice :: Device
 myDevice = Device CUDA 0
 -- myDevice = Device CPU 0
